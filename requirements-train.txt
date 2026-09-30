@@ -1,0 +1,14 @@
+# ============================================================================
+#  TRAINING ONLY -- needed for src/denoising/training and src/separation/training
+#  NOTHING here is executed by the web app.
+# ============================================================================
+torch>=2.1
+torchaudio>=2.1
+numpy>=1.24
+scipy>=1.10
+soundfile>=0.12.1
+librosa>=0.10.1
+pyyaml>=6.0
+tqdm>=4.66
+tensorboard>=2.15
+matplotlib>=3.7

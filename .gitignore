@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store
+
+# audio + run artefacts
+data/raw/*
+data/outputs/*
+data/cache/*
+data/datasets/*
+!data/**/.gitkeep
+!data/**/README.md
+
+# model weights
+models/checkpoints/*
+models/pretrained/*
+!models/**/.gitkeep
+!models/**/README.md
+*.ckpt
+*.pth
+*.onnx
+
+runs/
+logs/

@@ -1,0 +1,48 @@
+# ============================================================================
+#  OPTIONAL BACKENDS -- install only the ones you actually want.
+#  Every one of these is guarded at runtime: if it is missing the method just
+#  shows up as "unavailable" in the UI with the install command next to it.
+#
+#  !! IMPORTANT !!  Torch has NO wheels for Python 3.14 yet.
+#                   Use a Python 3.10 / 3.11 virtual-env for anything below.
+# ============================================================================
+
+# ---- torch (pick the right index-url for your GPU, CPU shown here) ---------
+# pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+torch>=2.1
+torchaudio>=2.1
+
+# ---- audio conveniences (optional; the app has fallbacks for all of these) --
+librosa>=0.10.1               # extra decoder + resampler (pulls in numba)
+soxr>=0.3.7                   # highest quality resampling, tiny wheel
+scikit-learn>=1.3             # not required: k-means/silhouette are implemented in numpy
+
+# ---- DENOISING backends ----------------------------------------------------
+noisereduce>=3.0.0            # spectral gating -- OPT-IN ONLY (SPECTRAL_GATE_BACKEND=
+                              # noisereduce). Measured worse than the built-in gate;
+                              # installing it alone changes nothing.
+deepfilternet>=0.5.6          # DeepFilterNet3   (SOTA real-time, 48 kHz)
+                              # Python <=3.11 ONLY: its DeepFilterLib wheel stops at
+                              # cp311, the sdist needs pyo3<=3.12, and it pins numpy<2.
+                              # On 3.12+ do NOT pip install it -- run
+                              #   python scripts/download_models.py deepfilternet
+                              # to fetch the official standalone binary instead
+                              # (same weights, no python, no numpy downgrade).
+denoiser>=0.1.5               # Meta Demucs-denoiser (dns64)
+resemble-enhance>=0.0.1       # denoise + generative enhancement (needs GPU ideally)
+pyrnnoise>=0.3.0              # RNNoise (Xiph) tiny GRU denoiser
+
+# ---- SEPARATION backends ---------------------------------------------------
+speechbrain>=1.0.0            # SepFormer / Resepformer / ECAPA embeddings
+asteroid>=0.7.0               # ConvTasNet / DPRNN / DCCRN model zoo
+pyannote.audio>=3.1.1         # speaker diarization 3.1 (any number of speakers)
+clearvoice>=0.0.4             # MossFormer2 (ClearerVoice-Studio)
+nemo_toolkit[asr]>=1.23       # NVIDIA NeMo MSDD diarizer (heavy)
+
+# ---- METRICS ---------------------------------------------------------------
+pesq>=0.0.4                   # ITU-T P.862 (needs a clean reference)
+pystoi>=0.4.1                 # short-time objective intelligibility
+onnxruntime>=1.17             # DNSMOS (reference-free MOS estimator)
+
+# ---- misc ------------------------------------------------------------------
+matplotlib>=3.7               # offline plots for the training scripts

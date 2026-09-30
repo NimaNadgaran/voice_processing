@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Denoise &amp; Separate</title>
+<meta name="description" content="Clean up a recording, then split every speaker into their own file." />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎧</text></svg>" />
+<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark" aria-hidden="true">
+      <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+      <span class="bar"></span><span class="bar"></span>
+    </div>
+    <div class="brand-text">
+      <h1>Denoise &amp; Separate</h1>
+      <p>Clean the noise out, then give every speaker their own file.</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <div id="health" class="health" title="backend status">
+      <span class="dot pending"></span><span id="health-text">connecting…</span>
+    </div>
+    <button id="theme-toggle" class="icon-btn" type="button" title="toggle light / dark">◐</button>
+  </div>
+</header>
+
+<main class="layout">
+
+  <div id="env-banner" class="env-banner hidden"></div>
+
+  <!-- ───────────────────────── 1. upload ───────────────────────── -->
+  <section class="card" id="card-upload">
+    <div class="card-head">
+      <span class="step">1</span>
+      <div>
+        <h2>Drop your recording in</h2>
+        <p class="sub">
+          Audio (wav, mp3, flac, m4a, ogg, opus) <b>or video</b> (mp4, mov, mkv, avi, webm) —
+          for a video the audio track is extracted automatically. Mono or stereo, any length.
+        </p>
+      </div>
+    </div>
+
+    <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="choose an audio file">
+      <input type="file" id="file-input" hidden
+             accept="audio/*,video/*,.wav,.mp3,.flac,.m4a,.ogg,.opus,.aac,.wma,.aiff,.mp4,.mov,.mkv,.avi,.webm,.wmv,.flv,.m4v,.mpg,.mpeg,.3gp" />
+      <div class="dz-inner">
+        <div class="dz-icon">⤓</div>
+        <p class="dz-title">Drag an audio or video file here</p>
+        <p class="dz-sub">or <span class="link">browse your computer</span></p>
+      </div>
+    </div>
+    <p class="hint">
+      No file handy? <button id="load-demo" class="linkish" type="button">Load the bundled 4-speaker demo</button>
+      — 24 s of synthetic conversation at 7 dB SNR, ground truth included.
+    </p>
+
+    <div id="file-info" class="file-info hidden">
+      <canvas id="input-wave" class="wave" height="76"></canvas>
+      <div class="file-meta">
+        <div class="fi-name" id="fi-name">—</div>
+        <div class="chips" id="fi-chips"></div>
+      </div>
+      <div class="file-actions">
+        <audio id="input-audio" controls preload="metadata"></audio>
+        <button id="clear-file" class="ghost-btn" type="button">Remove</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────────────────── 2. paths ───────────────────────── -->
+  <section class="card" id="card-paths">
+    <div class="card-head">
+      <span class="step">2</span>
+      <div>
+        <h2>Pick your pipelines</h2>
+        <p class="sub">
+          A <b>path</b> = one denoiser + one separator. Tick several and they all run on the
+          same file so you can compare them side by side.
+        </p>
+      </div>
+    </div>
+
+    <div id="path-grid" class="path-grid"><div class="skeleton">loading paths…</div></div>
+
+    <div class="builder">
+      <div class="builder-head">
+        <h3>Build your own paths</h3>
+        <p class="sub">
+          Each row below is one more path. Choose the denoising module you want
+          (or <b>No denoising</b>) and the separation module you want (or
+          <b>No separation</b>), then press <b>+</b> to add another row.
+        </p>
+      </div>
+
+      <div id="custom-rows" class="custom-rows"></div>
+
+      <button id="add-row" class="add-row-btn" type="button">
+        <span class="plus">+</span> Add another path
+      </button>
+      <p id="custom-hint" class="hint"></p>
+    </div>
+
+    <details class="method-browser">
+      <summary>All available methods &amp; how to install the rest</summary>
+      <div class="method-cols">
+        <div>
+          <h3>Denoisers</h3>
+          <div id="denoiser-list" class="method-list"></div>
+        </div>
+        <div>
+          <h3>Separators</h3>
+          <div id="separator-list" class="method-list"></div>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <!-- ───────────────────────── 3. options ───────────────────────── -->
+  <section class="card" id="card-options">
+    <div class="card-head">
+      <span class="step">3</span>
+      <div>
+        <h2>Options</h2>
+        <p class="sub">Sensible defaults — you can just hit run.</p>
+      </div>
+    </div>
+
+    <div class="options-row">
+      <label class="opt">
+        <span>How many speakers?</span>
+        <select id="opt-speakers">
+          <option value="">Detect automatically</option>
+          <option value="1">1</option><option value="2">2</option>
+          <option value="3">3</option><option value="4">4</option>
+          <option value="5">5</option><option value="6">6</option>
+          <option value="7">7</option><option value="8">8</option>
+        </select>
+        <small>Pin it if you already know — it always beats a guess.</small>
+      </label>
+
+      <label class="opt">
+        <span>Count speakers on</span>
+        <select id="opt-count-on">
+          <option value="original">The original audio (recommended)</option>
+          <option value="denoised">The denoised audio</option>
+        </select>
+        <small>Heavy denoising erases the fine detail speaker embeddings need.</small>
+      </label>
+
+      <label class="opt checkbox">
+        <input type="checkbox" id="opt-normalize" />
+        <span>Normalise each speaker track</span>
+        <small>Levels every voice to the same peak. Nice for listening, bad for measuring.</small>
+      </label>
+    </div>
+  </section>
+
+  <!-- ───────────────────────── run ───────────────────────── -->
+  <div class="runbar" id="runbar">
+    <div class="runbar-info">
+      <span id="run-summary">Choose a file and at least one path.</span>
+    </div>
+    <button id="run-btn" class="primary-btn" type="button" disabled>
+      <span class="btn-label">Run pipeline</span>
+      <span class="btn-spinner" hidden></span>
+    </button>
+  </div>
+
+  <!-- ───────────────────────── progress ───────────────────────── -->
+  <section class="card hidden" id="card-progress">
+    <div class="card-head">
+      <span class="step live">●</span>
+      <div>
+        <h2>Working…</h2>
+        <p class="sub" id="progress-sub">warming up</p>
+      </div>
+      <div class="head-right"><span class="timer" id="elapsed">0.0s</span></div>
+    </div>
+
+    <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+    <div id="stage-list" class="stage-list"></div>
+    <details class="log-box" id="log-box">
+      <summary>Live log</summary>
+      <pre id="log"></pre>
+    </details>
+  </section>
+
+  <!-- ───────────────────────── results ───────────────────────── -->
+  <section id="results" class="results"></section>
+
+  <!-- ───────────────────────── comparison ───────────────────────── -->
+  <section class="card hidden" id="card-compare">
+    <div class="card-head">
+      <span class="step">⚖</span>
+      <div>
+        <h2>Compare the paths</h2>
+        <p class="sub" id="compare-note"></p>
+      </div>
+      <div class="head-right">
+        <a id="download-zip" class="ghost-btn" href="#" download>Download everything (.zip)</a>
+      </div>
+    </div>
+    <div id="ranking" class="ranking"></div>
+    <div class="table-scroll"><table id="compare-table" class="compare-table"></table></div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <span>All processing is local unless you explicitly pick an API method.</span>
+  <span class="sep">·</span>
+  <span>Docs live next to the code: <code>src/denoising/README.md</code> and <code>src/separation/README.md</code></span>
+  <span class="sep">·</span>
+  <span>Scores are reference-free estimates — trust your ears too.</span>
+</footer>
+
+<div id="toasts" class="toasts"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

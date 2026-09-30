@@ -1,0 +1,31 @@
+# ============================================================================
+#  CORE  --  everything the app needs to RUN with the always-available methods
+#            (classic DSP denoisers + clustering separation + the web UI).
+#
+#  Install:  pip install -r requirements.txt
+#
+#  Deliberately small and wheel-only, so it installs on any Python 3.9-3.14.
+#  Optional accelerators (librosa, soxr, noisereduce) and every neural backend
+#  live in requirements-optional.txt -- the app probes for them at runtime and
+#  greys out what is missing instead of crashing.
+# ============================================================================
+numpy>=1.24,<3.0
+scipy>=1.10
+soundfile>=0.12.1
+pyyaml>=6.0
+
+# ---- web layer -------------------------------------------------------------
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9
+pydantic>=2.5
+
+# ---- video support ---------------------------------------------------------
+# Bundles a static ffmpeg binary, so mp4/mov/mkv/avi audio tracks can be read
+# without a system-wide ffmpeg install or admin rights. Drop it if you only
+# ever feed the app plain audio files.
+imageio-ffmpeg>=0.4.9
+
+# ---- small utilities -------------------------------------------------------
+tqdm>=4.66
+requests>=2.31

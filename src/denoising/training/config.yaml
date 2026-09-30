@@ -1,0 +1,45 @@
+# ===========================================================================
+#  SpectralUNet denoiser -- training config
+#
+#  Run:  python -m src.denoising.training.train_unet --config src/denoising/training/config.yaml
+#  Dry:  python -m src.denoising.training.train_unet --config … --estimate-only
+#
+#  The trainer times the first steps on YOUR machine and prints a real ETA
+#  before it starts, so treat the numbers in README.md as a starting point only.
+# ===========================================================================
+
+# ---- data -----------------------------------------------------------------
+clean_dir: data/datasets/clean      # any folder tree of clean speech wavs
+noise_dir: data/datasets/noise      # optional; synthetic noise is used if empty
+sample_rate: 16000
+segment_seconds: 2.0
+snr_range: [-5.0, 20.0]             # training SNRs; go lower for harder audio
+
+# ---- model (must match what the inference wrapper rebuilds) ---------------
+n_fft: 512
+hop: 128
+base_channels: 32                   # 16 = tiny, 32 = base, 48 = large
+depth: 4                            # number of down/up levels
+use_gru: true                       # bottleneck BiGRU for temporal context
+mask_type: sigmoid                  # sigmoid | relu | crm (complex ratio mask)
+
+# ---- optimisation ---------------------------------------------------------
+batch_size: 8
+epochs: 100
+steps_per_epoch: 1000               # mixtures are generated on the fly
+val_items: 200
+lr: 0.0003
+weight_decay: 0.0
+grad_clip: 5.0
+amp: true                           # mixed precision (CUDA only)
+num_workers: 0                      # >0 needs `if __name__ == "__main__"` on Windows
+seed: 0
+
+# ---- loss -----------------------------------------------------------------
+w_sisnr: 1.0                        # scale-invariant SNR on the waveform
+w_stft: 0.5                         # multi-resolution STFT magnitude term
+
+# ---- bookkeeping ----------------------------------------------------------
+out_dir: models/checkpoints
+run_name: denoise_unet
+log_every: 25

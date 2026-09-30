@@ -1,0 +1,46 @@
+# ===========================================================================
+#  Conv-TasNet separator -- training config
+#
+#  Run:  python -m src.separation.training.train_convtasnet --config src/separation/training/config.yaml
+#  Dry:  python -m src.separation.training.train_convtasnet --config … --estimate-only
+#
+#  IMPORTANT: `clean_dir` must contain ONE FOLDER PER SPEAKER. Mixing two clips
+#  of the same person teaches the model nothing (the permutation is ambiguous).
+# ===========================================================================
+
+# ---- data -----------------------------------------------------------------
+clean_dir: data/datasets/speakers   # <speaker_id>/*.wav  (LibriSpeech layout also works)
+noise_dir: null                     # set to a noise folder to train a noisy separator
+n_src: 2                            # 2 or 3 -- baked into the checkpoint
+sample_rate: 8000                   # 8 kHz is the WSJ0-mix standard and 4x cheaper
+segment_seconds: 4.0
+
+# ---- model (Conv-TasNet; names follow the paper) --------------------------
+enc_channels: 256                   # N  encoder basis size
+enc_kernel: 16                      # L  encoder kernel (2 ms at 8 kHz)
+bottleneck: 128                     # B
+hidden: 256                         # H
+kernel: 3                           # P  depthwise conv kernel
+n_blocks: 7                         # X  blocks per repeat (dilation 1..2^(X-1))
+n_repeats: 2                        # R  repeats
+norm: gLN                           # gLN (offline) | cLN (causal/streaming)
+causal: false
+mask_act: relu                      # relu | sigmoid
+
+# ---- optimisation ---------------------------------------------------------
+batch_size: 4
+epochs: 100
+steps_per_epoch: 1000
+val_items: 150
+lr: 0.001
+weight_decay: 0.0
+grad_clip: 5.0
+mixture_consistency: 0.1            # extra term: sources must sum back to the mix
+amp: true
+num_workers: 0
+seed: 0
+
+# ---- bookkeeping ----------------------------------------------------------
+out_dir: models/checkpoints
+run_name: separation_convtasnet
+log_every: 25
