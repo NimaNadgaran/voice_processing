@@ -5,6 +5,24 @@ Read the [main README](README.md), [fresh-clone setup](docs/SETUP.md) and
 DeepFilterNet plus built-in clustering; preserve all three stages' selectable
 algorithms and documented limitations.
 
+## Thanks, credit and sharing improvements
+
+Everyone is welcome to use and improve this project under its [MIT License](LICENSE).
+Keep Nima Nadgaran's copyright notice and the license with copies or substantial
+portions you distribute. Additional acknowledgement in your project's README is
+appreciated, but is not an extra license requirement.
+
+If you change something and make it better, you have my thanks! Open a pull
+request, or email [thisisnima.nd1384@gmail.com](mailto:thisisnima.nd1384@gmail.com)
+to let me know. Include a link to your changes, a short explanation and any
+relevant test results so I can consider updating this project. Please do not
+send credentials, private recordings or model weights by email.
+
+Sharing improvements and contacting me are voluntary; you do not need to email
+me or seek individual permission to use the project. Contributions submitted
+for inclusion in this repository should be offered under the same MIT License,
+and you must have the right to share them. Preserve third-party license notices.
+
 ## Backend changes
 
 Methods register through `src/core/registry.py` and expose `MethodInfo` metadata.

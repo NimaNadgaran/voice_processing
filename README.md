@@ -429,10 +429,24 @@ shorter clip"). The full traceback still goes to the server console and to
 
 ## Licence
 
-No project-wide `LICENSE` file has been supplied. The repository owner should
-choose the intended project license before distributing it. Optional packages,
-model weights and datasets retain their own licenses; review those separately.
-See [models/README.md](models/README.md).
+This project's original code and documentation are released under the
+[MIT License](LICENSE), copyright 2026 **Nima Nadgaran**. Everyone is welcome to
+use, copy, modify and share them, including for commercial purposes. Keep my
+copyright notice and the license with copies or substantial portions you
+distribute. A project credit such as "Denoise & Separate by Nima Nadgaran" in
+your README or acknowledgements is also appreciated.
+
+If you change the project and make it better, you have my thanks! You are welcome
+to open a pull request or email me at
+[thisisnima.nd1384@gmail.com](mailto:thisisnima.nd1384@gmail.com) with a link or
+description of your improvements so I can consider including them in an update.
+Sharing improvements or emailing me is appreciated, but is not a condition of
+using the project. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Optional dependencies, third-party code, model weights and datasets retain their
+own licenses; the project license does not override those terms or grant rights
+to other people's recordings. Review them separately; see
+[models/README.md](models/README.md).
 
 ## Preparing for GitHub
 

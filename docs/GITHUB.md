@@ -103,7 +103,9 @@ the documentation/ignore updates.
 
 Check the rendered main README and its relative links, confirm code/YAML/TXT
 requirements and the demo are present, and verify that recordings, weights,
-datasets and credentials are not in the proposed commit. Choose a project
-license yourself before distributing it; these changes do not assign one.
+datasets and credentials are not in the proposed commit. Include the root
+[MIT License](../LICENSE) and preserve Nima Nadgaran's copyright notice. Review
+the separate licenses of dependencies, models and datasets before distributing
+any third-party material; this project license does not replace their terms.
 Verify fresh-clone instructions rather than relying on your local cached files.
 GitHub is hosting the source, not the live Python application or training queue.
