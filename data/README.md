@@ -5,10 +5,13 @@ data/
 ├── raw/          uploads land here (one timestamped copy per job)
 ├── outputs/      one folder per job:  <job_id>/<path_id>/…
 ├── cache/        scratch (API uploads, NeMo work dirs)
-└── datasets/     TRAINING corpora — you put these here, nothing downloads by itself
+└── datasets/     training/evaluation corpora, including explicitly requested downloads
 ```
 
-Nothing in here is committed to git.
+Only this guide and the existing directory `.gitkeep` markers are committed.
+Uploads, outputs, caches, datasets and local inventories such as
+`installed-before.json` stay local. Runtime files are created as needed on a
+fresh clone; do not publish private recordings or transcripts to GitHub.
 
 ---
 
@@ -17,12 +20,14 @@ Nothing in here is committed to git.
 ```
 data/outputs/job_20260901-013832_66b1de/
 ├── report.json                      ← the whole run: metrics, timings, comparison
-├── original_meeting.wav             ← exactly what you uploaded (decoded to wav)
+├── meeting_original.wav             ← original audio decoded to WAV
 ├── path1/
 │   ├── result.json
-│   ├── 01_denoised.wav              ← first output
-│   ├── 02_speaker_01.wav            ← one file per speaker
-│   ├── 02_speaker_02.wav
+│   ├── meeting__path1__01_denoised_spectral_gate.wav
+│   ├── meeting__path1__02_speaker01_diarize_cluster.wav
+│   ├── meeting__path1__02_speaker02_diarize_cluster.wav
+│   ├── meeting__path1__03_speaker01_faster_whisper.txt
+│   ├── meeting__path1__03_speaker02_faster_whisper.txt
 │   └── …
 └── path4/
     └── …
@@ -39,6 +44,13 @@ report["paths"][0]["denoised"]["metrics"]["snr_improvement_db"]
 report["comparison"]["ranking"]
 ```
 
+Actual names include the sanitized source stem, path and method; prefixes may
+be shortened for safe filenames. Text is plain UTF-8, including Persian.
+TXT files appear when recognition succeeds or finds no speech; failures are
+reported in `tracks[].transcription` while speaker audio remains available.
+Per-path and whole-job ZIP downloads include all produced text/audio/reports.
+See [API/report fields](../docs/API.md).
+
 Old jobs are never deleted automatically. `data/outputs/` is just folders —
 delete what you do not need.
 
@@ -46,7 +58,7 @@ delete what you do not need.
 
 ## Datasets (training only)
 
-Only needed if you train the local models. Expected layout:
+Training speech is needed only for local model training. An example layout:
 
 ```
 data/datasets/
@@ -86,6 +98,16 @@ python scripts/prepare_datasets.py --flat-to-speakers PATH --out data/datasets/s
 The script never downloads multi-GB corpora behind your back — it prints the
 commands and organises what you have already fetched.
 
+Root **`python setup.py` is different**: explicitly running it prepares/trains
+both local models and can download LibriSpeech `train-clean-100` (~6.4 GB) if
+default training speech is missing. Even `--estimate-only` can prepare/download
+data before measuring time. `--no-download` prevents that. Downloads and
+archives remain ignored; see [training/ETA instructions](../docs/TRAINING.md).
+
+Recorded-reference audits use a separately acquired `dev-clean` corpus or other
+held-out references, not the training download. Keep evaluation speech out of
+training and validate source licenses before sharing any corpus.
+
 ### How little can you get away with?
 
 | goal | clean speech | noise | speakers |
@@ -105,3 +127,10 @@ impulsive) when `noise/` is empty, so you can start with speech alone.
 Uploads stay on your machine. The only exceptions are the two `api_huggingface`
 methods, which are disabled unless you set `HF_TOKEN` yourself and are labelled
 "uploads audio" in the UI.
+
+All four speech-to-text engines process voices locally after weight downloads.
+The server has no authentication and should stay on localhost for private audio.
+Old uploads/outputs are not auto-deleted; review exact folders before cleanup,
+and do not erase training/checkpoint work to prepare a GitHub upload. Ignoring
+files leaves them intact on disk. Completed job files persist across restarts,
+but live in-process job state does not; see [API notes](../docs/API.md).

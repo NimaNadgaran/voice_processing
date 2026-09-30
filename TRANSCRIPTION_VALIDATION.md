@@ -104,5 +104,10 @@ python scripts/audit_transcription.py --methods faster_whisper,vosk --language e
 python scripts/audit_transcription.py --input your_persian.wav --language fa --methods faster_whisper,persian_wav2vec2,vosk --reference-text "your verified transcript" --label persian_reference
 python run.py serve --port 9139
 # Separate terminal; requires playwright and Chrome:
-python scripts/check_transcription_ui.py --url http://127.0.0.1:9139 --run-pipeline data/outputs/path_audit_final_overlap_preset/turn_taking.wav
+python scripts/check_transcription_ui.py --url http://127.0.0.1:9139 --run-pipeline your_two_speaker.wav
 ```
+
+Supply your own two-speaker turn-taking recording for the browser workflow.
+The audit/evidence paths above describe this computer's ignored local outputs,
+not files available in a fresh GitHub clone. See
+[fresh-clone setup](docs/SETUP.md) and [scripts/README.md](scripts/README.md).

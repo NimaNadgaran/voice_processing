@@ -18,12 +18,40 @@ recording -> DENOISE -> SEPARATE -> SPEECH TO TEXT (per speaker)
 
 ---
 
+## Suggested algorithms
+
+For ordinary speech recordings where people mostly take turns, use
+**DeepFilterNet 3 (`deepfilternet`) for denoising** and **built-in Clustering
+Diarization (`diarize_cluster`) for speaker separation**. These are the suggested
+algorithms for this project. Add Faster Whisper (`faster_whisper`) for local
+multilingual speech-to-text, or disable stage 3 for audio only.
+
+In the UI, create a custom row with those two modules and choose the
+speech-to-text engine/language in Options. The built-in separator needs no
+account or gated diarization model. Optional ECAPA embeddings can improve it,
+but they require additional dependencies and a model download.
+
+```bash
+python run.py pipeline meeting.wav --denoiser deepfilternet --separator diarize_cluster --transcriber faster_whisper --language fa
+```
+
+Pin `--speakers N` when you know the count. For other languages use their code,
+or `--language auto` with Whisper. These suggestions are not a promise of
+perfect results: clustering labels turns rather than unmixing simultaneous
+voices, and denoising can suppress a second overlapping speaker. For sustained
+overlap compare neural source separation and a no-denoising control; see the
+[measured audio results](AUDIO_VALIDATION.md).
+
 ## Quick start
+
+First create and activate a virtual environment; the
+[fresh-clone setup guide](docs/SETUP.md) has Windows and Linux/macOS commands.
 
 ```bash
 pip install -r requirements.txt
 pip install -r requirements-stt.txt   # optional local speech-to-text engines
 python run.py demo            # makes a synthetic 4-speaker test file
+python scripts/download_models.py deepfilternet faster_whisper
 python run.py serve           # → http://127.0.0.1:8000
                               # port busy? it rolls to 8001, 8002, ...
 ```
@@ -38,7 +66,7 @@ the neural audio backends you want:
 
 ```bash
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-pip install denoiser speechbrain           # the two that matter most
+pip install speechbrain                    # optional ECAPA speaker embeddings
 ```
 
 (`deepfilternet` is stronger still. Its pip package stops at CPython 3.11, so on
@@ -74,6 +102,10 @@ python run.py doctor
 ```
 denoise_seprate/
 ├── run.py                    CLI: serve / doctor / denoise / separate / transcribe / pipeline / demo
+├── setup.py                  sequential local-model training with finish-time estimates
+├── requirements*.txt         core and optional backend dependencies
+├── docs/                     setup, training, API, and GitHub publishing guides
+├── CONTRIBUTING.md           development and validation guidelines
 ├── src/
 │   ├── core/                 shared: audio I/O, DSP, metrics, registry, dataclasses
 │   ├── denoising/            ← STAGE 1  (README.md inside)
@@ -94,7 +126,7 @@ denoise_seprate/
 ├── data/                     raw uploads, outputs, cache, training datasets
 ├── scripts/                  make_demo_audio · download_models · prepare_datasets
 │                             benchmark (accuracy vs truth) · selftest (end-to-end API)
-└── tests/                    smoke tests that run without any optional dependency
+└── tests/                    core smoke tests and optional-backend regression tests
 ```
 
 **Read next:**
@@ -103,11 +135,18 @@ denoise_seprate/
 [`src/transcription/README.md`](src/transcription/README.md) ·
 [`frontend/README.md`](frontend/README.md) ·
 [`models/README.md`](models/README.md) ·
-[`data/README.md`](data/README.md)
+[`data/README.md`](data/README.md) ·
+[`docs/SETUP.md`](docs/SETUP.md) ·
+[`docs/TRAINING.md`](docs/TRAINING.md) ·
+[`docs/API.md`](docs/API.md) ·
+[`docs/GITHUB.md`](docs/GITHUB.md) ·
+[`scripts/README.md`](scripts/README.md) ·
+[`tests/README.md`](tests/README.md) ·
+[`CONTRIBUTING.md`](CONTRIBUTING.md)
 
 ---
 
-## Denoising — 9 ways
+## Denoising — 9 methods plus bypass
 
 | key | method | needs | notes |
 |---|---|---|---|
@@ -115,7 +154,7 @@ denoise_seprate/
 | `spectral_gate` | spectral gating | — | built-in numpy gate; `noisereduce` is opt-in via `SPECTRAL_GATE_BACKEND` and measures worse |
 | `wiener_mmse` | MMSE-LSA (Ephraim-Malah) | — | conservative statistical suppression; can still distort speech |
 | `rnnoise` | RNNoise (Xiph) | `pyrnnoise` | 85 kB GRU, no torch |
-| `deepfilternet` | DeepFilterNet 3 | `deepfilternet`, or the standalone binary | **the default recommendation** — pip package needs Python ≤ 3.11; the binary works anywhere |
+| `deepfilternet` | DeepFilterNet 3 | `deepfilternet`, or a supported standalone binary | **suggested denoiser** — pip package needs Python ≤ 3.11; binary availability depends on platform |
 | `demucs_denoiser` | Demucs DNS64 | `denoiser` | best on clicks/slams |
 | `demucs_vocals` | htdemucs vocal isolation | `demucs` | best when the background is music |
 | `resemble_enhance` | diffusion restoration | `resemble-enhance` | repairs clipping; generative |
@@ -127,7 +166,7 @@ denoise_seprate/
 | key | method | type | speakers | needs |
 |---|---|---|---|---|
 | `none` | bypass (single track) | — | 1 | — |
-| `diarize_cluster` | clustering diarization | diarization | **any** | — (built in) |
+| `diarize_cluster` | **suggested: built-in clustering diarization** | diarization | **any** | — (built in) |
 | `pyannote` | pyannote.audio diarization | diarization | **any** | `pyannote.audio` + token + accepted model conditions |
 | `nemo_msdd` | NVIDIA NeMo MSDD | diarization | **any** | `nemo_toolkit[asr]` |
 | `sepformer` | SepFormer | separation | 2–3 | `speechbrain` |
@@ -165,7 +204,7 @@ on the same upload and the results are compared automatically.
 | id | name | path | ready on a bare install |
 |---|---|---|---|
 | `path1` | Instant | `spectral_gate → diarize_cluster` | ✅ |
-| `path2` | Balanced (recommended) | `deepfilternet → pyannote` | needs torch; falls back to `demucs_denoiser → diarize_cluster` |
+| `path2` | Balanced | `deepfilternet → pyannote` | pyannote needs torch and model access; unavailable components use installed stand-ins |
 | `path3` | Cocktail party | `wiener_mmse → convtasnet_asteroid` | needs torch + asteroid; separator falls back to SepFormer |
 | `path4` | Classic DSP | `wiener_mmse → diarize_cluster` | ✅ |
 | `path5` | Music / TV background | `demucs_vocals → convtasnet_asteroid` | needs torch |
@@ -179,6 +218,10 @@ Under the preset cards the UI has a **row builder**: each row is one more path
 *No separation*) and speech-to-text engine, press **+** for another row, tick the rows you want to run.
 Blocked paths and modules stay visible with the exact `pip install` line.
 
+The suggested `deepfilternet → diarize_cluster` combination is a **custom row**,
+not the `path2` preset, which names pyannote. The built-in `path1` remains the
+lightweight `spectral_gate → diarize_cluster` starting path.
+
 ---
 
 ## Using it without the UI
@@ -186,14 +229,14 @@ Blocked paths and modules stay visible with the exact `pip install` line.
 ```bash
 # one file, one method
 python run.py denoise  meeting.wav --method deepfilternet -o clean.wav
-python run.py separate clean.wav   --method pyannote --speakers 4 -o speakers/
+python run.py separate clean.wav   --method diarize_cluster --speakers 4 -o speakers/
 python run.py transcribe clean.wav --method faster_whisper --language fa -o transcript.txt
 
 # the whole thing, several paths, with a comparison table
 python run.py pipeline meeting.wav --paths path1,path4,path8 --speakers 4 --transcriber auto --language fa
 
 # a custom combination
-python run.py pipeline meeting.wav --denoiser rnnoise --separator sepformer
+python run.py pipeline meeting.wav --denoiser deepfilternet --separator diarize_cluster --transcriber faster_whisper --language fa
 ```
 
 ```python
@@ -271,6 +314,8 @@ pass `models=['local_unet']` to select models. CPU defaults to a compact 16 kHz
 denoiser and tiny separator; CUDA defaults to base models. Plans, ETA reports
 and backups of replaced checkpoints are in `runs/setup_<timestamp>/`.
 See [AUDIO_VALIDATION.md](AUDIO_VALIDATION.md) for verification and limitations.
+The [training and ETA guide](docs/TRAINING.md) documents all setup arguments,
+data reuse, checkpoint backups, resume behavior and offline preparation.
 
 > **No training ever starts by itself.** The app and the CLI never import the
 > training packages. You run these commands, or nothing trains.
@@ -308,6 +353,10 @@ epochs; separators need far longer.
 Everything runs locally. The two `api_huggingface` methods are the only
 exception — they upload your audio to Hugging Face, they are **disabled unless
 you set `HF_TOKEN` yourself**, and the UI labels them "uploads audio".
+
+The default server listens on localhost and has no authentication layer.
+Do not expose it publicly with private recordings; see the
+[API and deployment notes](docs/API.md).
 
 ---
 
@@ -380,5 +429,19 @@ shorter clip"). The full traceback still goes to the server console and to
 
 ## Licence
 
-The code here is yours to use. Each optional backend keeps its own licence
-(MIT / Apache-2.0 / CC BY-NC for some datasets) — `models/README.md` lists them.
+No project-wide `LICENSE` file has been supplied. The repository owner should
+choose the intended project license before distributing it. Optional packages,
+model weights and datasets retain their own licenses; review those separately.
+See [models/README.md](models/README.md).
+
+## Preparing for GitHub
+
+Publish the code, requirements, YAML configs, documentation, tests and bundled
+synthetic frontend demo. `.gitignore` excludes environments, credentials,
+personal recordings, datasets, weights, training runs and generated outputs.
+The Markdown guides and `.gitkeep` directory markers remain included.
+
+Use the [GitHub upload checklist](docs/GITHUB.md) to review the exact files,
+commit and push. A fresh clone rebuilds its environment and downloads/trains
+models locally; cached weights and training corpora are intentionally not part
+of the repository. This documentation change does not itself push anything.

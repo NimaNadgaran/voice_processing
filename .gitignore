@@ -1,29 +1,132 @@
+# Python environments, downloaded runtimes, packaging and bytecode
+.venv/
+.venv*/
+venv/
+venv*/
+env/
+.python/
+.uv-cache/
+.tox/
+.nox/
 __pycache__/
 *.py[cod]
-.venv/
-venv/
+*.egg-info/
+.eggs/
+/build/
+/dist/
+
+# Tests, coverage, linters and notebook scratch
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.ipynb_checkpoints/
+
+# Local IDE / agent configuration and operating-system files
 .idea/
 .vscode/
+.claude/
+.codex/
+.agents/
+.aws/
 .DS_Store
-.claude
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
 
-# audio + run artefacts
-data/raw/*
-data/outputs/*
-data/cache/*
-data/datasets/*
-!data/**/.gitkeep
-!data/**/README.md
+# Credentials and private environment configuration; examples may be published
+.env
+.env.*
+!.env.example
+!.env.template
+*.pem
+*.key
+*.p12
+*.pfx
+/hf_token*
+/token.txt
+/secrets/
+/credentials/
 
-# model weights
-models/checkpoints/*
-models/pretrained/*
-!models/**/.gitkeep
-!models/**/README.md
-*.ckpt
+# Runtime data: retain only the repository guide and empty-directory markers.
+# Explicit parent exceptions keep .gitkeep visible without exposing downloaded
+# dataset/model READMEs or nested generated files.
+/data/**
+!/data/README.md
+!/data/raw/
+!/data/outputs/
+!/data/cache/
+!/data/datasets/
+!/data/raw/.gitkeep
+!/data/outputs/.gitkeep
+!/data/cache/.gitkeep
+!/data/datasets/.gitkeep
+
+# Model caches, local training checkpoints, downloads and logs
+/models/**
+!/models/README.md
+!/models/checkpoints/
+!/models/pretrained/
+!/models/checkpoints/.gitkeep
+!/models/pretrained/.gitkeep
+/samples/
+/runs/
+/logs/
+*.log
+*.pt
 *.pth
+*.ckpt
+*.safetensors
 *.onnx
+*.tflite
+*.h5
+*.hdf5
+*.bin
+*.pkl
+*.joblib
+*.part
+*.partial
+*.incomplete
 
-samples
-runs/
-logs/
+# Download archives and personal recordings, including those outside data/.
+# Do not ignore all .json/.yaml/.csv/.txt files: source configs and requirements
+# are needed on a fresh clone. Do not ignore *.ts (it can be TypeScript source).
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.gz
+*.bz2
+*.7z
+*.rar
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.aac
+*.ogg
+*.opus
+*.aiff
+*.aif
+*.amr
+*.wma
+*.caf
+*.au
+*.mp4
+*.m4v
+*.mov
+*.mkv
+*.webm
+*.avi
+*.wmv
+*.flv
+*.mpg
+*.mpeg
+*.3gp
+*.ogv
+!/frontend/assets/demo_conversation.wav

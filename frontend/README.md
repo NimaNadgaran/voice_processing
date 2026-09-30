@@ -8,7 +8,7 @@ refresh is the whole development loop.
 frontend/
 ├── index.html     structure (upload → paths → options → run → results → compare)
 ├── styles.css     design tokens + every component; dark by default, light theme included
-├── app.js         all behaviour (~700 lines, no dependencies)
+├── app.js         all behaviour, no frontend package dependencies
 └── assets/
     └── demo_conversation.wav    bundled 4-speaker demo for the "try it" button
 ```
@@ -20,7 +20,7 @@ frontend/
 ```
 1  drop a file          → decoded in the browser, waveform drawn on a canvas
 2  tick pipeline paths  → 9 preset cards + a row builder (+ adds another path)
-3  options              → pin the speaker count, choose what to count on, normalise
+3  options              → choose STT engine/language, speaker count, count source, normalise
 4  run                  → POST /api/jobs, then poll
 5  results appear ONE BY ONE as the backend writes each file
 6  compare              → ranking bars + a metric table with the winner starred
@@ -28,7 +28,7 @@ frontend/
 
 ### Results really do stream in
 
-The backend emits an `artifact` event the moment each wav hits disk. `app.js`
+The backend emits an `artifact` event when a speaker WAV or transcript hits disk. `app.js`
 turns those into player cards immediately, so the denoised file is playable
 while the separator is still running. When the job finishes, the partial cards
 are replaced by the full render (metrics, waveforms, timelines, fun stats).
@@ -91,10 +91,18 @@ seen.
 
 ## Speech-to-text controls and downloads
 
+Suggested custom-row audio modules: **DeepFilterNet 3** followed by **Clustering
+Diarization (built-in)**. Preset `path1` uses spectral gating instead; preset
+`path2` names pyannote. Recommendations do not change preset definitions.
+
 Options includes a recognizer and language selector. Auto chooses an installed
 multilingual engine; Persian-specialized Wav2Vec2 and English/Persian Vosk have
 language restrictions shown in the UI. Custom paths can inherit the global
 recognizer, disable transcription, or select a different engine.
+
+The shared language selector respects selected custom-row engines too. Vosk
+requires explicit English/Persian even with global STT off and a row override.
+A Persian specialist's Auto assumes Persian; it does not detect other languages.
 
 Every successfully transcribed speaker row has a safe plain-text preview
 (`dir="auto"` for Persian/Arabic) and **Download text file** link. UTF-8 text
@@ -102,6 +110,8 @@ downloads and all ZIP archives include transcripts. Recognition failure shows
 its reason without removing the speaker's audio player/download. No
 transcription shows audio only. Model and language preferences persist in
 `localStorage` (`ds-stt-method`, `ds-stt-language`).
+Highly repetitive text is flagged for review; it is not proof of an error and
+does not silently discard possibly real repetition.
 
 `GET /api/methods` supplies recognizers and language metadata; the existing
 `GET /api/files/{job}/{path}/{file}` endpoint also serves text files. See

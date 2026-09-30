@@ -170,7 +170,10 @@ python scripts/audit_audio.py --methods sepformer,convtasnet_asteroid --speakers
 python scripts/benchmark_paths.py --paths path1,path2,path3,path4,path5,path6,path7,path8,path9 --label verified
 ```
 
-Full local pytest suite passed **129 tests**. Tests cover short/empty audio,
+The audio-stage pytest suite passed **129 tests** before speech-to-text was
+added. The later combined suite passed **168 tests**, documented in
+[TRANSCRIPTION_VALIDATION.md](TRANSCRIPTION_VALIDATION.md).
+Audio tests cover short/empty audio,
 sample rates, delayed-tail preservation, chunk permutation and lengths,
 backend result layouts, label/turn identity, cloud isolation and access errors,
 training-state preservation, model selection and validation-inclusive ETAs.

@@ -1,11 +1,20 @@
 # Denoising
 
+Suggested algorithm: **DeepFilterNet 3 (`deepfilternet`)**, followed by
+built-in clustering (`diarize_cluster`) when speakers mostly take turns.
+For modern Python environments, fetch the standalone denoiser with
+`python scripts/download_models.py deepfilternet`; no DeepFilterNet pip package
+or gated-model account is required for that route. If there is no compatible
+standalone release for your platform, the backend reports it explicitly.
+Compare a no-denoising control on overlapping speech; suppression is not
+guaranteed to preserve every simultaneous voice.
+
 Latest tuning, measured results, dependency limits and reproducible checks:
 [AUDIO_VALIDATION.md](../../AUDIO_VALIDATION.md). Both local models can be
 prepared and trained sequentially with `python setup.py` from the project root.
 
 > Stage 1 of the pipeline. Input: one noisy recording. Output: one clean file.
-> Nine interchangeable backends, all behind the same three-line interface.
+> Nine processing methods plus bypass, behind the same three-line interface.
 
 ```python
 from src.denoising import denoise
@@ -48,7 +57,7 @@ which is why the UI flags it.
 
 ---
 
-## 2. The nine backends
+## 2. Nine methods plus bypass
 
 | key | name | family | speed | quality | offline | install |
 |---|---|---|---|---|---|---|
@@ -72,10 +81,10 @@ shows an "uploads audio" badge next to it.
 
 ```
 Is the background MUSIC or a TV?           → demucs_vocals
-Is it hiss / fan / hum / traffic?          → deepfilternet   (spectral_gate if no torch)
+Is it hiss / fan / hum / traffic?          → deepfilternet   (standalone binary needs no torch)
 Is it clicks, slams, keyboard?             → demucs_denoiser
 Is the recording clipped / phone-codec'd?  → resemble_enhance
-Will a human read this as evidence?        → wiener_mmse     (never invents anything)
+Is speech preservation essential?         → keep the original; compare conservative DSP against it
 Is it 3 hours long on an old laptop?       → rnnoise
 Do you have your own domain data?          → local_unet
 No GPU, no installs, need it now?          → spectral_gate

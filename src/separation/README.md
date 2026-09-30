@@ -1,5 +1,12 @@
 # Speaker separation
 
+Suggested algorithm: **built-in Clustering Diarization (`diarize_cluster`)**
+for meetings/interviews with mostly turn-taking speakers. Pair it with
+DeepFilterNet (`deepfilternet`) for the suggested denoise/separate workflow.
+Clustering requires no gated-model account, but cannot acoustically separate
+simultaneous voices. Optional ECAPA embeddings download if SpeechBrain is used.
+For sustained overlap, compare the fixed-source neural separators instead.
+
 Latest adapter fixes, real-audio results and access limits:
 [AUDIO_VALIDATION.md](../../AUDIO_VALIDATION.md). Local model setup/training is
 available through `python setup.py` at the project root.
@@ -12,7 +19,7 @@ available through `python setup.py` at the project root.
 from src.separation import count_speakers, separate
 
 print(count_speakers("meeting.wav"))          # {'n_speakers': 4, 'confidence': 0.82, …}
-res = separate("meeting.wav", method="pyannote", output_dir="out/")
+res = separate("meeting.wav", method="diarize_cluster", output_dir="out/")
 for track in res.tracks:
     print(track.label, track.total_speech, track.path)
 ```
@@ -37,7 +44,7 @@ disappointed by their results.
 **Rule of thumb**
 
 ```
-Meeting / interview / podcast — people mostly take turns   → diarization  (pyannote, or diarize_cluster)
+Meeting / interview / podcast — people mostly take turns   → built-in clustering (diarize_cluster)
 Two people talking over each other the whole time          → separation   (sepformer, mossformer)
 4+ people AND heavy overlap                                → diarization first; separation on the overlapped spans
 Don't know                                                 → run both as two paths and compare in the UI
@@ -82,10 +89,12 @@ It automatically uses **SpeechBrain ECAPA-TDNN** embeddings if `speechbrain` is
 installed (much better) and falls back to MFCC-based features otherwise. The
 metrics report which one ran (`"embedding": "ecapa-tdnn" | "mfcc-numpy"`).
 
-**`pyannote`** — the best real-world default. Neural segmentation *with overlap
+**`pyannote`** — an optional neural diarization alternative. Neural segmentation *with overlap
 detection* + agglomerative clustering of embeddings. Finds the speaker count on
 its own, accepts a pinned count, and reports real turn boundaries. Requires
-accepting two model licences on the Hub (free) and a read token.
+model access and a read token: 4.x uses `speaker-diarization-community-1`, while
+3.x uses `speaker-diarization-3.1` / `segmentation-3.0`. Accept the conditions
+for the version actually installed; a token alone does not establish access.
 
 **`sepformer`** — dual-path transformer, permutation-invariant SI-SNR training.
 Genuinely unmixes simultaneous speech. Quadratic in length, so long files are

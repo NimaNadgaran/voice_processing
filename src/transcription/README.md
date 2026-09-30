@@ -1,5 +1,12 @@
 # Stage 3: speech to text
 
+This follows the suggested **DeepFilterNet → built-in Clustering Diarization**
+audio stack. Use Faster Whisper as the installed multilingual starting engine,
+pin `fa` for known Persian speech, and compare alternatives on representative
+recordings. [Fresh-clone setup](../../docs/SETUP.md),
+[API options](../../docs/API.md) and
+[measured validation](../../TRANSCRIPTION_VALIDATION.md) cover the full workflow.
+
 Each speaker's separated audio gets its own transcript, preview and **Download
 text file** button. Text files are plain UTF-8 (including Persian), and the
 per-path / whole-job ZIP downloads include them. This is transcription in the
