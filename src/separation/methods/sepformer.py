@@ -145,10 +145,16 @@ class SepFormerSeparator(BaseSeparator):
 
         work = audio if audio.sr == sr else resample(audio, sr)
         model, device = self._get_model(model_id)
+        # Use the checkpoint's own metadata for custom model IDs too.
+        sr = int(getattr(getattr(model, 'hparams', None), 'sample_rate', sr))
+        n_src = int(getattr(getattr(model, 'hparams', None), 'num_spks', n_src))
+        work = audio if audio.sr == sr else resample(audio, sr)
 
         def run_block(block: np.ndarray) -> List[np.ndarray]:
+            if len(block) < 256:
+                block = np.pad(block, (0, 256 - len(block)))
             tensor = torch.from_numpy(np.ascontiguousarray(block)).float().unsqueeze(0).to(device)
-            with torch.no_grad():
+            with torch.inference_mode():
                 est = model.separate_batch(tensor)  # (batch, time, n_src)
             est = est[0].cpu().numpy()
             return [est[:, i].astype(np.float32) for i in range(est.shape[-1])]

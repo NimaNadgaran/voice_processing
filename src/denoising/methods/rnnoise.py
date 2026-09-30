@@ -88,9 +88,11 @@ class RNNoiseDenoiser(BaseDenoiser):
 
         pcm = np.clip(audio.samples, -1.0, 1.0)
         pcm16 = (pcm * 32767.0).astype(np.int16)
-        pad = (-len(pcm16)) % FRAME
-        if pad:
-            pcm16 = np.pad(pcm16, (0, pad))
+        if not len(pcm16):
+            return audio.copy(), {"backend": "rnnoise", "frames": 0}
+        # Flush the delayed speech with actual zero frames; appending silence
+        # AFTER processing loses the last 20 ms (and all of a short clip).
+        pcm16 = np.pad(pcm16, (0, (-len(pcm16)) % FRAME + ALGORITHMIC_DELAY))
 
         state = create()
         try:
@@ -112,12 +114,7 @@ class RNNoiseDenoiser(BaseDenoiser):
         # -23 dB on real speech that was actually cleaned well) and pushes the
         # speaker tracks off the original timeline.  Drop the priming samples
         # and pad the tail so length is preserved.
-        if len(arr) > ALGORITHMIC_DELAY:
-            arr = np.concatenate(
-                [arr[ALGORITHMIC_DELAY:], np.zeros(ALGORITHMIC_DELAY, dtype=np.float32)]
-            )
-        if pad:
-            arr = arr[: len(arr) - pad]
+        arr = arr[ALGORITHMIC_DELAY:ALGORITHMIC_DELAY + audio.n_samples]
 
         info = {
             "backend": "rnnoise",
@@ -131,33 +128,44 @@ class RNNoiseDenoiser(BaseDenoiser):
 
     def _denoise_wrapper(self, audio: AudioBuffer):
         denoiser = self._factory(self.target_sr)
+        # Modern pyrnnoise normally initializes these through denoise_chunk's
+        # audiolab resampler. We already supply mono 48 kHz PCM, so initialize
+        # frame processing directly and avoid an unnecessary/versioned graph.
+        if hasattr(denoiser, "channels"):
+            denoiser.channels = 1
+        if hasattr(denoiser, "dtype"):
+            denoiser.dtype = np.dtype(np.int16)
         pcm = np.clip(audio.samples, -1.0, 1.0)
         pcm16 = (pcm * 32767.0).astype(np.int16)
 
-        pad = (-len(pcm16)) % FRAME
-        if pad:
-            pcm16 = np.pad(pcm16, (0, pad))
+        if not len(pcm16):
+            return audio.copy(), {"backend": "rnnoise", "frames": 0}
+        pcm16 = np.pad(pcm16, (0, (-len(pcm16)) % FRAME + ALGORITHMIC_DELAY))
 
         out_chunks = []
         probs = []
-        for start in range(0, len(pcm16), FRAME):
-            frame = pcm16[start: start + FRAME]
-            processed = self._process_frame(denoiser, frame)
-            if processed is None:
-                continue
-            prob, data = processed
-            if prob is not None:
-                probs.append(float(prob))
-            out_chunks.append(np.asarray(data, dtype=np.int16).reshape(-1))
+        try:
+            for start in range(0, len(pcm16), FRAME):
+                frame = pcm16[start: start + FRAME]
+                processed = self._process_frame(denoiser, frame)
+                if processed is None:
+                    continue
+                prob, data = processed
+                if prob is not None:
+                    probs.append(float(np.mean(prob)))
+                out_chunks.append(np.asarray(data, dtype=np.int16).reshape(-1))
+        finally:
+            if hasattr(denoiser, "reset"):
+                denoiser.reset()
 
         if not out_chunks:
             raise RuntimeError("pyrnnoise returned no frames -- unexpected API shape")
 
         arr = np.concatenate(out_chunks).astype(np.float32) / 32767.0
-        if pad:
-            arr = arr[: len(arr) - pad] if len(arr) > pad else arr
+        arr = arr[ALGORITHMIC_DELAY:ALGORITHMIC_DELAY + audio.n_samples]
 
-        info = {"backend": "rnnoise", "frames": len(out_chunks)}
+        info = {"backend": "rnnoise", "frames": len(out_chunks),
+                "delay_compensated_samples": ALGORITHMIC_DELAY}
         if probs:
             info["mean_speech_prob"] = round(float(np.mean(probs)), 4)
             info["voiced_frame_ratio"] = round(float(np.mean(np.array(probs) > 0.5)), 4)
@@ -181,16 +189,22 @@ class RNNoiseDenoiser(BaseDenoiser):
                 return last[0], last[1]
             return None, last
         if hasattr(denoiser, "denoise_frame"):
-            res = denoiser.denoise_frame(frame)
-            # 0.4.x returns (samples, speech_prob) -- our caller wants it the
-            # other way round.
-            return (res[1], res[0]) if isinstance(res, tuple) else (None, res)
+            res = denoiser.denoise_frame(frame[None, :] if hasattr(denoiser, "channels") else frame)
+            return RNNoiseDenoiser._unpack(res)
         if hasattr(denoiser, "denoise_chunk"):
-            # a generator of (samples, speech_prob); drain it and keep the last
-            last = None
-            for item in denoiser.denoise_chunk(frame):
-                last = item
-            if last is None:
+            items = [RNNoiseDenoiser._unpack(item) for item in denoiser.denoise_chunk(frame)]
+            if not items:
                 return None
-            return (last[1], last[0]) if isinstance(last, tuple) else (None, last)
+            probs = [float(np.mean(p)) for p, _ in items if p is not None]
+            return (float(np.mean(probs)) if probs else None,
+                    np.concatenate([np.asarray(data).reshape(-1) for _, data in items]))
         raise RuntimeError("unsupported pyrnnoise version: no known process method")
+
+    @staticmethod
+    def _unpack(result):
+        if not isinstance(result, tuple):
+            return None, result
+        a, b = result
+        # Current releases return (probability, samples); older bindings reverse
+        # it. Detect by frame size rather than assuming an installed version.
+        return (a, b) if np.asarray(a).size < np.asarray(b).size else (b, a)

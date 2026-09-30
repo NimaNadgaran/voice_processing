@@ -18,7 +18,7 @@
     </div>
     <div class="brand-text">
       <h1>Denoise &amp; Separate</h1>
-      <p>Clean the noise out, then give every speaker their own file.</p>
+      <p>Clean the audio, separate the speakers, then transcribe each voice.</p>
     </div>
   </div>
   <div class="topbar-right">
@@ -80,7 +80,7 @@
       <div>
         <h2>Pick your pipelines</h2>
         <p class="sub">
-          A <b>path</b> = one denoiser + one separator. Tick several and they all run on the
+          A <b>path</b> = denoise → separate → speech-to-text. Tick several and they all run on the
           same file so you can compare them side by side.
         </p>
       </div>
@@ -94,7 +94,7 @@
         <p class="sub">
           Each row below is one more path. Choose the denoising module you want
           (or <b>No denoising</b>) and the separation module you want (or
-          <b>No separation</b>), then press <b>+</b> to add another row.
+          <b>No separation</b>), and a speech-to-text method. Press <b>+</b> to compare another row.
         </p>
       </div>
 
@@ -117,6 +117,10 @@
           <h3>Separators</h3>
           <div id="separator-list" class="method-list"></div>
         </div>
+        <div>
+          <h3>Speech-to-text</h3>
+          <div id="transcriber-list" class="method-list"></div>
+        </div>
       </div>
     </details>
   </section>
@@ -126,12 +130,23 @@
     <div class="card-head">
       <span class="step">3</span>
       <div>
-        <h2>Options</h2>
-        <p class="sub">Sensible defaults — you can just hit run.</p>
+        <h2>Speech-to-text &amp; options</h2>
+        <p class="sub">Each speaker gets their own transcript. Choose a multilingual model or a language specialist.</p>
       </div>
     </div>
 
     <div class="options-row">
+      <label class="opt">
+        <span>3. Speech-to-text method</span>
+        <select id="opt-transcriber"><option value="auto">Automatic — installed multilingual model</option></select>
+        <small id="stt-method-hint">Loading speech recognition methods…</small>
+      </label>
+
+      <label class="opt">
+        <span>Spoken language</span>
+        <select id="opt-language"><option value="auto">Detect language automatically</option></select>
+        <small id="stt-language-hint">The spoken language is preserved; this is transcription, not translation.</small>
+      </label>
       <label class="opt">
         <span>How many speakers?</span>
         <select id="opt-speakers">
@@ -215,7 +230,7 @@
 <footer class="foot">
   <span>All processing is local unless you explicitly pick an API method.</span>
   <span class="sep">·</span>
-  <span>Docs live next to the code: <code>src/denoising/README.md</code> and <code>src/separation/README.md</code></span>
+  <span>Stage docs: <code>src/denoising/</code>, <code>src/separation/</code>, <code>src/transcription/</code></span>
   <span class="sep">·</span>
   <span>Scores are reference-free estimates — trust your ears too.</span>
 </footer>

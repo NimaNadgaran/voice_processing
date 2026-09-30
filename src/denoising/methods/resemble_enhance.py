@@ -71,19 +71,22 @@ class ResembleEnhanceDenoiser(BaseDenoiser):
         wav = torch.from_numpy(np.ascontiguousarray(audio.samples)).float()
 
         with torch.no_grad():
-            dwav, new_sr = denoise(wav, audio.sr, self._device)
             try:
                 dwav, new_sr = enhance(
-                    dwav, new_sr, self._device, nfe=32, solver="midpoint", lambd=0.9, tau=0.5
+                    wav, audio.sr, self._device, nfe=64, solver="rk4", lambd=0.9, tau=0.5
                 )
                 stage = "denoise+enhance"
-            except Exception:
+                enhancement_error = ""
+            except Exception as exc:
+                dwav, new_sr = denoise(wav, audio.sr, self._device)
                 stage = "denoise-only"
+                enhancement_error = str(exc)
 
         arr = dwav.detach().cpu().numpy().astype(np.float32).reshape(-1)
         return AudioBuffer(arr, int(new_sr)), {
             "backend": "resemble-enhance",
             "stage": stage,
             "device": self._device,
-            "generative": True,
+            "generative": stage == "denoise+enhance",
+            "enhancement_error": enhancement_error,
         }

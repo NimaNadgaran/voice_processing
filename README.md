@@ -4,19 +4,16 @@ Upload a recording with several people in it -- **audio or video** (for a video
 the audio track is extracted automatically). Get back:
 
 1. **a denoised version** of the whole file, then
-2. **one clean file per speaker** — 4 speakers in, 4 files out —
+2. **one audio file per speaker** — 4 speakers in, 4 files out — then
+3. **a speech-to-text transcript per speaker**, with a preview and **Download text file** button.
 
-with the number of speakers, a confidence figure, timings and quality metrics
-shown in a web UI, and **several denoiser × separator pipelines you can run side
-by side and compare**.
+The web UI also shows speaker counts, confidence, timings and quality metrics,
+with **several processing paths you can run side by side and compare**.
 
 ```
-                    ┌──────────────┐      ┌──────────────┐
-  meeting.wav ─────►│  DENOISE     │─────►│  SEPARATE    │─────► speaker_01.wav
-   (4 people,       │  9 backends  │  │   │  8 backends  │       speaker_02.wav
-    noisy)          └──────────────┘  │   └──────────────┘       speaker_03.wav
-                                      │                          speaker_04.wav
-                                      └──► 01_denoised.wav  (output #1)
+recording -> DENOISE -> SEPARATE -> SPEECH TO TEXT (per speaker)
+                 |          |               |
+           denoised.wav  speakerNN.wav   speakerNN.txt
 ```
 
 ---
@@ -25,6 +22,7 @@ by side and compare**.
 
 ```bash
 pip install -r requirements.txt
+pip install -r requirements-stt.txt   # optional local speech-to-text engines
 python run.py demo            # makes a synthetic 4-speaker test file
 python run.py serve           # → http://127.0.0.1:8000
                               # port busy? it rolls to 8001, 8002, ...
@@ -33,9 +31,10 @@ python run.py serve           # → http://127.0.0.1:8000
 `python run.py` with no arguments (or PyCharm's green Run button) also starts
 the web UI and prints the list of other commands.
 
-That is enough for a fully working app: two DSP denoisers and the clustering
-separator need nothing but numpy and scipy. Then add the neural backends you
-want:
+Core dependencies are enough for audio processing: two DSP denoisers and the
+clustering separator need nothing but numpy and scipy. Speech-to-text requires
+its optional dependencies above; disable stage 3 for an audio-only run. Then add
+the neural audio backends you want:
 
 ```bash
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
@@ -74,7 +73,7 @@ python run.py doctor
 
 ```
 denoise_seprate/
-├── run.py                    one CLI: serve / doctor / denoise / separate / pipeline / demo
+├── run.py                    CLI: serve / doctor / denoise / separate / transcribe / pipeline / demo
 ├── src/
 │   ├── core/                 shared: audio I/O, DSP, metrics, registry, dataclasses
 │   ├── denoising/            ← STAGE 1  (README.md inside)
@@ -87,7 +86,8 @@ denoise_seprate/
 │   │   ├── chunking.py       long-file support with permutation stitching
 │   │   ├── architectures.py  Conv-TasNet (the trainable one)
 │   │   └── training/         train_convtasnet.py + dataset + PIT losses + config
-│   ├── pipeline/             paths (denoiser+separator combos), runner, comparison
+│   ├── transcription/        ← STAGE 3: four local recognizers, languages, UTF-8 export
+│   ├── pipeline/             three-stage paths, runner, comparison
 │   └── api/                  FastAPI server + in-process job manager
 ├── frontend/                 vanilla HTML/CSS/JS UI (README.md inside)
 ├── models/                   weights: yours in checkpoints/, downloads in pretrained/
@@ -100,6 +100,7 @@ denoise_seprate/
 **Read next:**
 [`src/denoising/README.md`](src/denoising/README.md) ·
 [`src/separation/README.md`](src/separation/README.md) ·
+[`src/transcription/README.md`](src/transcription/README.md) ·
 [`frontend/README.md`](frontend/README.md) ·
 [`models/README.md`](models/README.md) ·
 [`data/README.md`](data/README.md)
@@ -112,7 +113,7 @@ denoise_seprate/
 |---|---|---|---|
 | `none` | bypass (control) | — | the A/B baseline |
 | `spectral_gate` | spectral gating | — | built-in numpy gate; `noisereduce` is opt-in via `SPECTRAL_GATE_BACKEND` and measures worse |
-| `wiener_mmse` | MMSE-LSA (Ephraim-Malah) | — | never invents artefacts |
+| `wiener_mmse` | MMSE-LSA (Ephraim-Malah) | — | conservative statistical suppression; can still distort speech |
 | `rnnoise` | RNNoise (Xiph) | `pyrnnoise` | 85 kB GRU, no torch |
 | `deepfilternet` | DeepFilterNet 3 | `deepfilternet`, or the standalone binary | **the default recommendation** — pip package needs Python ≤ 3.11; the binary works anywhere |
 | `demucs_denoiser` | Demucs DNS64 | `denoiser` | best on clicks/slams |
@@ -127,7 +128,7 @@ denoise_seprate/
 |---|---|---|---|---|
 | `none` | bypass (single track) | — | 1 | — |
 | `diarize_cluster` | clustering diarization | diarization | **any** | — (built in) |
-| `pyannote` | pyannote.audio 3.1 | diarization | **any** | `pyannote.audio` + free token |
+| `pyannote` | pyannote.audio diarization | diarization | **any** | `pyannote.audio` + token + accepted model conditions |
 | `nemo_msdd` | NVIDIA NeMo MSDD | diarization | **any** | `nemo_toolkit[asr]` |
 | `sepformer` | SepFormer | separation | 2–3 | `speechbrain` |
 | `convtasnet_asteroid` | Conv-TasNet zoo | separation | 2–3 | `asteroid` |
@@ -136,31 +137,46 @@ denoise_seprate/
 | `api_huggingface` | HF Inference API | separation | 2–3 | ⚠ uploads your audio |
 
 **Diarization vs separation matters** — a 4-speaker meeting needs diarization
-(no open model outputs 4 sources). The separation README explains the choice in
+with the supplied pretrained checkpoints (at most 3 sources). The separation README explains the choice in
 one table; the UI just lets you run both and compare.
 
 ---
 
+## Speech to text — 4 local ways
+
+After separation, each output voice can be transcribed using Faster Whisper,
+Transformers Whisper, a Persian-specialized Wav2Vec2 model, or lightweight Vosk
+(English/Persian). Whisper supports 99 languages including Persian; specialist
+models only accept their supported languages. Choose the engine and language in
+Options, or override the engine per custom path to compare results.
+
+The UI defaults to Auto; disable transcription for audio-only runs. Models
+download on first use and are cached locally; no ASR training is needed. Text
+files are UTF-8, include Persian correctly, and are included in ZIP downloads.
+If recognition fails, the speaker audio is still available. See
+[Stage 3 setup, model choices and limitations](src/transcription/README.md).
+
 ## Pipeline paths
 
-A *path* is one denoiser + one separator. Tick as many as you like; they all run
+A *path* is one denoiser + one separator, optionally followed by speech to text.
+Tick as many as you like; they all run
 on the same upload and the results are compared automatically.
 
 | id | name | path | ready on a bare install |
 |---|---|---|---|
 | `path1` | Instant | `spectral_gate → diarize_cluster` | ✅ |
 | `path2` | Balanced (recommended) | `deepfilternet → pyannote` | needs torch; falls back to `demucs_denoiser → diarize_cluster` |
-| `path3` | Cocktail party | `deepfilternet → sepformer` | needs torch; falls back to `demucs_denoiser` |
+| `path3` | Cocktail party | `wiener_mmse → convtasnet_asteroid` | needs torch + asteroid; separator falls back to SepFormer |
 | `path4` | Classic DSP | `wiener_mmse → diarize_cluster` | ✅ |
 | `path5` | Music / TV background | `demucs_vocals → convtasnet_asteroid` | needs torch |
 | `path6` | Your own models | `local_unet → local_convtasnet` | train them |
-| `path7` | Cloud | `api_huggingface → api_huggingface` | needs `HF_TOKEN` |
+| `path7` | Cloud | `api_huggingface → api_huggingface` | needs token and deployed compatible denoising/separation endpoints |
 | `path8` | Control | `none → diarize_cluster` | ✅ |
 | `path9` | Real-time stack | `rnnoise → diarize_cluster` | needs `pyrnnoise` |
 
 Under the preset cards the UI has a **row builder**: each row is one more path
 — pick the denoising module (or *No denoising*) and the separation module (or
-*No separation*), press **+** for another row, tick the rows you want to run.
+*No separation*) and speech-to-text engine, press **+** for another row, tick the rows you want to run.
 Blocked paths and modules stay visible with the exact `pip install` line.
 
 ---
@@ -171,9 +187,10 @@ Blocked paths and modules stay visible with the exact `pip install` line.
 # one file, one method
 python run.py denoise  meeting.wav --method deepfilternet -o clean.wav
 python run.py separate clean.wav   --method pyannote --speakers 4 -o speakers/
+python run.py transcribe clean.wav --method faster_whisper --language fa -o transcript.txt
 
 # the whole thing, several paths, with a comparison table
-python run.py pipeline meeting.wav --paths path1,path4,path8 --speakers 4
+python run.py pipeline meeting.wav --paths path1,path4,path8 --speakers 4 --transcriber auto --language fa
 
 # a custom combination
 python run.py pipeline meeting.wav --denoiser rnnoise --separator sepformer
@@ -186,7 +203,7 @@ report = run_pipeline(
     "meeting.wav",
     [resolve_path({"id": "path1"}), resolve_path({"denoiser": "wiener_mmse",
                                                   "separator": "diarize_cluster"})],
-    PipelineOptions(num_speakers=4),
+    PipelineOptions(num_speakers=4, transcription_method="auto", transcription_language="fa"),
     progress=lambda e: print(e["message"]),
 )
 print(report["comparison"]["ranking"])
@@ -204,6 +221,8 @@ Per run:
   it is written
 * `<name>__<path>__02_speakerNN_<separator>.wav` — one per speaker, aligned to
   the original timeline
+* `<name>__<path>__03_speakerNN_<transcriber>.txt` — each speaker's UTF-8 transcript
+  when speech-to-text is enabled
 
   Every file carries the source name, the path that produced it and the method
   used, so outputs from different paths never collide when you download them
@@ -227,6 +246,31 @@ Per run:
 ---
 
 ## Training your own models
+
+On another computer after cloning, run:
+
+```bash
+python setup.py
+```
+
+This creates/reuses `.venv`, installs training dependencies if needed, prepares
+training speech, measures both local models on that computer, prints cumulative
+finish-time estimates, then trains `local_unet` followed by `local_convtasnet`.
+Missing training data triggers a ~6.4 GB LibriSpeech download (allow about 15 GB
+free disk). Internet and a Python version supported by torch are required.
+Dependency installation and data preparation happen before training ETAs.
+
+```bash
+python setup.py --estimate-only
+python setup.py --models local_unet          # train only the denoiser
+python setup.py --models local_convtasnet --resume
+```
+
+Programmatic entry point: `from setup import train_models; train_models()`;
+pass `models=['local_unet']` to select models. CPU defaults to a compact 16 kHz
+denoiser and tiny separator; CUDA defaults to base models. Plans, ETA reports
+and backups of replaced checkpoints are in `runs/setup_<timestamp>/`.
+See [AUDIO_VALIDATION.md](AUDIO_VALIDATION.md) for verification and limitations.
 
 > **No training ever starts by itself.** The app and the CLI never import the
 > training packages. You run these commands, or nothing trains.
@@ -273,8 +317,8 @@ you set `HF_TOKEN` yourself**, and the UI labels them "uploads audio".
   not take over a busy machine. Raise it if you want more speed.
 * Paths run sequentially inside a job; two jobs run concurrently
   (`JobManager(workers=2)`).
-* Long files are chunked automatically — 10 s blocks for transformer separators
-  with permutation stitching so speakers never swap files mid-recording.
+* Long files are chunked automatically, with overlap-based permutation stitching.
+  It reduces speaker swaps but cannot guarantee identity through silent overlaps.
 * Models are loaded once and cached in the registry across jobs.
 
 ## Input formats
@@ -295,6 +339,20 @@ system ffmpeg on `PATH` is used in preference if you have one. `python run.py
 doctor` tells you which was found.
 
 ## Testing and measuring
+
+The latest backend, reference-audio and training checks are documented in
+[AUDIO_VALIDATION.md](AUDIO_VALIDATION.md).
+Speech-to-text implementation, measured tests and accuracy limitations are in
+[TRANSCRIPTION_VALIDATION.md](TRANSCRIPTION_VALIDATION.md).
+
+Reproduce the expanded checks with:
+
+```bash
+python -m pytest tests -q
+python scripts/audit_audio.py --save-audio --label verified
+python scripts/benchmark_denoising.py --save-audio --label denoising
+python scripts/benchmark_paths.py --label verified
+```
 
 ```bash
 python tests/test_smoke.py                       # 23 unit tests, no optional deps

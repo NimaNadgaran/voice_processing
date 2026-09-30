@@ -24,6 +24,8 @@ file it writes.
 from __future__ import annotations
 
 import os
+import inspect
+import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -69,10 +71,13 @@ class NemoMSDDSeparator(BaseSeparator):
         return True, ""
 
     def load(self) -> None:
+        import torch
         from nemo.collections.asr.models.msdd_models import NeuralDiarizer  # type: ignore
 
         name = os.environ.get("NEMO_DIAR_MODEL", "diar_msdd_telephonic")
         self._model = NeuralDiarizer.from_pretrained(model_name=name)
+        self._model.to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+        self._model.eval()
         self._model_name = name
         self._loaded = True
 
@@ -91,7 +96,8 @@ class NemoMSDDSeparator(BaseSeparator):
         seg_lists: List[List[List[float]]] = []
         labels: List[str] = []
         for i, speaker in enumerate(order):
-            segs = sorted(segments[speaker])
+            from ..diarization import merge_turns
+            segs = merge_turns(segments[speaker], audio.duration)
             mask = segments_to_mask(segs, audio.n_samples, audio.sr, fade_ms=25.0)
             sources.append((audio.samples * mask).astype(np.float32))
             seg_lists.append(segs)
@@ -112,44 +118,56 @@ class NemoMSDDSeparator(BaseSeparator):
 
     # ------------------------------------------------------------------ #
     def _run(self, wav_path: Path, work_dir: Path, num_speakers: Optional[int]) -> Dict[str, List[List[float]]]:
-        # style A: callable diarizer returning a pyannote-style Annotation
-        try:
-            kwargs = {"audio_filepath": str(wav_path)}
+        manifest = work_dir / 'manifest.json'
+        entry = dict(audio_filepath=str(wav_path), offset=0, duration=None,
+                     label='infer', text='-', num_speakers=num_speakers,
+                     rttm_filepath=None, uem_filepath=None)
+        manifest.write_text(json.dumps(entry) + '\n', encoding='utf-8')
+        cfg = getattr(self._model, 'cfg', None)
+        if cfg is None:
+            cfg = getattr(self._model, '_cfg', None)
+        if cfg is not None:
+            from omegaconf import open_dict
+            for key, value in {'diarizer.manifest_filepath': str(manifest),
+                               'diarizer.out_dir': str(work_dir),
+                               'diarizer.clustering.parameters.oracle_num_speakers': bool(num_speakers)}.items():
+                node = cfg
+                parts = key.split('.')
+                for part in parts[:-1]:
+                    with open_dict(node):
+                        if part not in node:
+                            node[part] = {}
+                    node = node[part]
+                with open_dict(node):
+                    node[parts[-1]] = value
             if num_speakers:
-                kwargs["num_speakers"] = int(num_speakers)
-            annotation = self._model(**kwargs)
-            out: Dict[str, List[List[float]]] = {}
+                with open_dict(cfg.diarizer.clustering.parameters):
+                    cfg.diarizer.clustering.parameters.max_num_speakers = int(num_speakers)
+        # Choose a supported signature up front. The previous implementation
+        # swallowed every model/config exception and then reported no output.
+        method = getattr(self._model, 'diarize', None)
+        if method is not None:
+            params = inspect.signature(method).parameters
+            if 'paths2audio_files' in params:
+                annotation = method(paths2audio_files=[str(wav_path)], batch_size=1)
+            elif 'audio' in params:
+                annotation = method(audio=str(wav_path), batch_size=1)
+            else:
+                annotation = method()
+        else:
+            method = self._model
+            params = inspect.signature(getattr(method, 'forward', method)).parameters
+            kwargs = {}
+            if 'num_speakers' in params:
+                kwargs['num_speakers'] = num_speakers
+            if 'out_dir' in params:
+                kwargs['out_dir'] = str(work_dir)
+            annotation = method(str(wav_path), **kwargs)
+        if hasattr(annotation, 'itertracks'):
+            out = {}
             for turn, _, speaker in annotation.itertracks(yield_label=True):
                 out.setdefault(str(speaker), []).append([float(turn.start), float(turn.end)])
-            if out:
-                return out
-        except Exception:
-            pass
-
-        # style B: manifest + diarize() writing an RTTM into work_dir
-        try:
-            import json
-
-            manifest = work_dir / "manifest.json"
-            entry = {
-                "audio_filepath": str(wav_path),
-                "offset": 0,
-                "duration": None,
-                "label": "infer",
-                "text": "-",
-                "num_speakers": int(num_speakers) if num_speakers else None,
-                "rttm_filepath": None,
-                "uem_filepath": None,
-            }
-            manifest.write_text(json.dumps(entry) + "\n", encoding="utf-8")
-            cfg = getattr(self._model, "cfg", None)
-            if cfg is not None:
-                cfg.diarizer.manifest_filepath = str(manifest)
-                cfg.diarizer.out_dir = str(work_dir)
-            self._model.diarize()
-        except Exception:
-            pass
-
+            return out
         return self._parse_rttm(work_dir)
 
     @staticmethod

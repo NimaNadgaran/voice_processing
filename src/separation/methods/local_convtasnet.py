@@ -86,6 +86,9 @@ class LocalConvTasNetSeparator(BaseSeparator):
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
         self._model = model.to(self._device)
         self._sr = int(cfg.get("sample_rate", 8000))
+        # MethodInfo is class-level: do not mutate every instance's metadata.
+        import copy
+        self.info = copy.deepcopy(self.info)
         self.info.max_speakers = int(cfg.get("n_src", 2))
         self._meta = {
             "epochs_trained": ckpt.get("epoch") if isinstance(ckpt, dict) else None,
@@ -104,7 +107,7 @@ class LocalConvTasNetSeparator(BaseSeparator):
 
         def run_block(block: np.ndarray) -> List[np.ndarray]:
             tensor = torch.from_numpy(np.ascontiguousarray(block)).float().unsqueeze(0).to(self._device)
-            with torch.no_grad():
+            with torch.inference_mode():
                 est = self._model(tensor)[0].cpu().numpy()
             return [est[i].astype(np.float32) for i in range(est.shape[0])]
 

@@ -102,8 +102,9 @@ def synth_noise(n: int, sr: int, rng: np.random.Generator) -> np.ndarray:
     # impulsive clicks / keyboard
     out = 0.05 * rng.standard_normal(n).astype(np.float32)
     for _ in range(int(rng.integers(3, 12))):
-        at = int(rng.integers(0, max(1, n - 300)))
-        out[at: at + 300] += rng.standard_normal(300).astype(np.float32) * float(rng.uniform(1, 4))
+        size = min(300, n)
+        at = int(rng.integers(0, max(1, n - size + 1)))
+        out[at: at + size] += rng.standard_normal(size).astype(np.float32) * float(rng.uniform(1, 4))
     return out
 
 

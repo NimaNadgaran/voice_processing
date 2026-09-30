@@ -5,6 +5,7 @@ venv/
 .idea/
 .vscode/
 .DS_Store
+.claude
 
 # audio + run artefacts
 data/raw/*
@@ -23,5 +24,6 @@ models/pretrained/*
 *.pth
 *.onnx
 
+samples
 runs/
 logs/

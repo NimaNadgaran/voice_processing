@@ -24,6 +24,7 @@ from ...core.registry import register_denoiser
 from ...core.types import AudioBuffer, MethodInfo
 from ...core.utils import module_available
 from ..base import BaseDenoiser
+from ..chunking import chunked_enhance
 
 
 @register_denoiser
@@ -44,7 +45,7 @@ class DemucsDenoiser(BaseDenoiser):
         offline=True,
         pip=["torch", "denoiser"],
         install_hint="pip install torch torchaudio && pip install denoiser",
-        notes="Works at 16 kHz -- anything above 8 kHz is regenerated on the way back.",
+        notes="Works at 16 kHz; output is band-limited to 8 kHz. Context and cross-fades prevent chunk seams.",
     )
     target_sr = 16000
     restore_sr = True
@@ -69,25 +70,9 @@ class DemucsDenoiser(BaseDenoiser):
     def _denoise(self, audio: AudioBuffer):
         import torch  # type: ignore
 
-        wav = torch.from_numpy(np.ascontiguousarray(audio.samples)).float()
-        wav = wav.unsqueeze(0).unsqueeze(0).to(self._device)  # (batch, chan, time)
-
-        # chunk long files so CPU RAM stays bounded (60 s blocks, 0.5 s overlap)
-        sr = audio.sr
-        block, overlap = 60 * sr, sr // 2
-        pieces = []
-        with torch.no_grad():
-            if wav.shape[-1] <= block:
-                pieces.append(self._model(wav)[0, 0].cpu().numpy())
-            else:
-                pos = 0
-                while pos < wav.shape[-1]:
-                    end = min(pos + block, wav.shape[-1])
-                    chunk = wav[..., max(0, pos - overlap): end]
-                    out = self._model(chunk)[0, 0].cpu().numpy()
-                    if pos > 0:
-                        out = out[overlap:]
-                    pieces.append(out)
-                    pos = end
-        arr = np.concatenate(pieces).astype(np.float32) if pieces else audio.samples
+        def process(block):
+            wav = torch.from_numpy(np.ascontiguousarray(block)).float()[None, None].to(self._device)
+            with torch.inference_mode():
+                return self._model(wav)[0, 0].cpu().numpy()
+        arr = chunked_enhance(process, audio.samples, audio.sr, chunk_s=30., context_s=.5)
         return AudioBuffer(arr, audio.sr), {"backend": "denoiser-dns64", "device": self._device}

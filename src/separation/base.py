@@ -20,6 +20,7 @@ The base class then does all the shared bookkeeping:
 from __future__ import annotations
 
 import copy
+import threading
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -55,6 +56,7 @@ class BaseSeparator:
     min_speech_seconds: float = 0.35
 
     def __init__(self) -> None:
+        self._run_lock = threading.RLock()
         self._loaded = False
         self._model: Any = None
 
@@ -125,6 +127,10 @@ class BaseSeparator:
         num_speakers: Optional[int] = None,
         progress: ProgressFn = None,
     ) -> SeparationResult:
+        with self._run_lock:
+            return self._run(audio, num_speakers, progress)
+
+    def _run(self, audio, num_speakers=None, progress=None):
         logs: List[str] = []
 
         def emit(pct: float, msg: str) -> None:
@@ -134,6 +140,8 @@ class BaseSeparator:
 
         emit(0.02, "preparing %s" % self.info.name)
         self._ensure_loaded()
+        if audio.n_samples == 0:
+            return SeparationResult([], self.info.key, 0., 0, 0., metrics={"empty_input": True})
 
         source_sr = audio.sr
         work = audio
@@ -156,10 +164,15 @@ class BaseSeparator:
 
         # a backend may resample internally and tell us via extra["output_sr"]
         out_sr = int(extra.get("output_sr", work.sr))
-        buffers = self._postprocess(out, out_sr, source_sr, audio.n_samples)
+        buffers, indices = self._postprocess(out, out_sr, source_sr, audio.n_samples,
+                                             return_indices=True, segments=extra.get("segments"))
         emit(0.8, "kept %d speaker track(s) after cleanup" % len(buffers))
 
-        tracks = self._build_tracks(buffers, extra.get("labels"), extra.get("segments"))
+        labels = extra.get("labels")
+        segments = extra.get("segments")
+        tracks = self._build_tracks(buffers,
+                                    [labels[i] for i in indices] if labels else None,
+                                    [segments[i] for i in indices] if segments else None)
         emit(0.9, "measuring separation quality")
 
         metrics = separation_metrics(audio, [t.audio for t in tracks])
@@ -211,10 +224,13 @@ class BaseSeparator:
         out_sr: int,
         source_sr: int,
         n_target: int,
+        return_indices=False,
+        segments=None,
     ) -> List[AudioBuffer]:
         bufs: List[AudioBuffer] = []
         for src in sources:
-            arr = np.nan_to_num(np.asarray(src, dtype=np.float32).reshape(-1))
+            arr = np.nan_to_num(np.asarray(src, dtype=np.float32).reshape(-1),
+                                nan=0., posinf=0., neginf=0.)
             buf = AudioBuffer(arr, out_sr)
             if self.restore_sr and buf.sr != source_sr:
                 buf = resample(buf, source_sr)
@@ -223,25 +239,30 @@ class BaseSeparator:
             bufs.append(buf)
 
         if not bufs:
-            return bufs
+            return (bufs, []) if return_indices else bufs
 
         energies = np.array([float(np.sqrt(np.mean(b.samples**2)) + 1e-12) for b in bufs])
         loudest = float(energies.max())
         keep: List[AudioBuffer] = []
-        for buf, energy in zip(bufs, energies):
+        indices = []
+        for i, (buf, energy) in enumerate(zip(bufs, energies)):
+            # Neural diarizers already know which turns are speech. Re-running
+            # the energy VAD can erase short/quiet speakers and corrupt labels.
+            known_speech = bool(segments and i < len(segments) and segments[i])
             rel_db = 20 * np.log10(energy / loudest)
-            if rel_db < -self.silence_floor_db:
+            if rel_db < -self.silence_floor_db and not known_speech:
                 continue
             mask, hop = energy_vad(buf.samples, buf.sr)
-            if float(mask.sum() * hop) < self.min_speech_seconds:
+            if float(mask.sum() * hop) < min(self.min_speech_seconds, buf.duration / 2) and not known_speech:
                 continue
             keep.append(buf)
+            indices.append(i)
 
         # never return nothing: fall back to the loudest raw stem
         if not keep:
             keep = [bufs[int(np.argmax(energies))]]
-        keep.sort(key=lambda b: -float(np.sqrt(np.mean(b.samples**2))))
-        return keep
+            indices = [int(np.argmax(energies))]
+        return (keep, indices) if return_indices else keep
 
     @staticmethod
     def _build_tracks(

@@ -1,5 +1,9 @@
 # Speaker separation
 
+Latest adapter fixes, real-audio results and access limits:
+[AUDIO_VALIDATION.md](../../AUDIO_VALIDATION.md). Local model setup/training is
+available through `python setup.py` at the project root.
+
 > Stage 2 of the pipeline. Input: one (denoised) recording with several people.
 > Output: **one file per speaker**, all aligned to the original timeline.
 > Eight interchangeable backends, plus a speaker counter.
@@ -39,8 +43,8 @@ Two people talking over each other the whole time          → separation   (sep
 Don't know                                                 → run both as two paths and compare in the UI
 ```
 
-A 4-speaker meeting is a *diarization* problem: no released open separation
-model outputs 4 sources. That is why `diarize_cluster` is the built-in default —
+A 4-speaker meeting needs diarization with the supplied pretrained checkpoints,
+which output at most three sources. `diarize_cluster` is the built-in default —
 it is the only family that actually answers "give me 4 files for 4 people".
 
 ---
@@ -60,7 +64,9 @@ it is the only family that actually answers "give me 4 files for 4 people".
 | `api_huggingface` | Hugging Face API | separation | 2–3 | medium | ●●●●○ | ❌ **uploads audio** | free HF token |
 
 Everything except `api_huggingface` runs locally. `api_huggingface` stays
-disabled until you set `HF_TOKEN` yourself.
+disabled until you set `HF_TOKEN` and configure a deployed compatible audio
+endpoint with `HF_SEPARATION_URL` or a hosted `HF_SEPARATION_MODEL`. A model
+existing on the Hub does not imply it has hosted inference.
 
 ### Notes per backend
 

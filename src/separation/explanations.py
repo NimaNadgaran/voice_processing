@@ -104,21 +104,21 @@ DETAILS: Dict[str, Dict[str, Any]] = {
             "model) predicts per-frame activity for up to 3 local speakers, "
             "overlap included.",
             "Extract a speaker embedding for each local speaker in each window.",
-            "Agglomerative hierarchical clustering ties local speakers across "
+            "Version-matched embedding clustering ties local speakers across "
             "windows into global identities; the clustering threshold determines "
             "the final speaker count.",
             "Resolve the local decisions into a global timeline of turns.",
             "We convert those turns into one faded mask per speaker and write the files.",
         ],
         "strengths": [
-            "Best real-world accuracy available for free (roughly 10-20% DER on hard data)",
+            "Neural segmentation and embeddings suited to real recorded conversations",
             "Finds the number of speakers by itself, and accepts a pinned count",
             "Explicitly detects overlapping speech instead of ignoring it",
             "Handles any number of speakers",
         ],
         "limitations": [
-            "You must accept the model licence on Hugging Face and set HF_TOKEN "
-            "(both free, one-time)",
+            "Accept community-1 model conditions for pyannote 4.x, or diarization-3.1 "
+            "and segmentation-3.0 conditions for 3.x; set HF_TOKEN for the same account",
             "Still diarization: overlapped regions are attributed to all active "
             "speakers, not acoustically unmixed",
             "Needs torch",
@@ -310,8 +310,8 @@ DETAILS: Dict[str, Dict[str, Any]] = {
     # -------------------------------------------------------- api_huggingface --
     "api_huggingface": {
         "how_it_works": (
-            "Uploads the audio to Hugging Face's free Inference API, which runs a "
-            "hosted SepFormer and returns one audio blob per separated speaker. "
+            "Uploads the audio to a configured Hugging Face audio endpoint, which runs a "
+            "hosted separator and returns one audio blob per separated speaker. "
             "Useful when you cannot install a multi-gigabyte torch stack locally."
         ),
         "steps": [
@@ -319,9 +319,10 @@ DETAILS: Dict[str, Dict[str, Any]] = {
             "Retry on HTTP 503 while the model cold-starts.",
             "Decode each returned base64 blob into a speaker track.",
         ],
-        "strengths": ["No local compute", "No large installs", "Free tier"],
+        "strengths": ["No local compute", "No large installs"],
         "limitations": [
-            "YOUR AUDIO LEAVES YOUR COMPUTER -- disabled until you set HF_TOKEN yourself",
+            "YOUR AUDIO LEAVES YOUR COMPUTER -- requires HF_TOKEN and a deployed "
+            "HF_SEPARATION_URL or actually hosted HF_SEPARATION_MODEL; costs may apply",
             "2-3 speakers only, and rate limited",
             "Needs an internet connection",
         ],

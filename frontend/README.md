@@ -89,6 +89,30 @@ seen.
 | raise the upload limit | `MAX_UPLOAD_MB` env var (server side) |
 | replace the demo clip | overwrite `assets/demo_conversation.wav`, or regenerate with `python run.py demo` |
 
+## Speech-to-text controls and downloads
+
+Options includes a recognizer and language selector. Auto chooses an installed
+multilingual engine; Persian-specialized Wav2Vec2 and English/Persian Vosk have
+language restrictions shown in the UI. Custom paths can inherit the global
+recognizer, disable transcription, or select a different engine.
+
+Every successfully transcribed speaker row has a safe plain-text preview
+(`dir="auto"` for Persian/Arabic) and **Download text file** link. UTF-8 text
+downloads and all ZIP archives include transcripts. Recognition failure shows
+its reason without removing the speaker's audio player/download. No
+transcription shows audio only. Model and language preferences persist in
+`localStorage` (`ds-stt-method`, `ds-stt-language`).
+
+`GET /api/methods` supplies recognizers and language metadata; the existing
+`GET /api/files/{job}/{path}/{file}` endpoint also serves text files. See
+[Stage 3 documentation](../src/transcription/README.md).
+
+```bash
+node tests/test_frontend_transcription.cjs
+# Optional real-browser check, with playwright and an installed Chrome:
+python scripts/check_transcription_ui.py --url http://127.0.0.1:8000
+```
+
 ## Browser support
 
 Anything current (Chrome, Edge, Firefox, Safari). Uses `fetch`, `AudioContext`,

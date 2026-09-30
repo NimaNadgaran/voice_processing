@@ -103,12 +103,20 @@ class AsteroidConvTasNetSeparator(BaseSeparator):
 
         model_id = pick_model(num_speakers)
         sr, n_src = MODEL_TABLE.get(model_id, (16000, 2))
-        work = audio if audio.sr == sr else resample(audio, sr)
         model, device = self._get_model(model_id)
+        # Some zoo checkpoints omit sample_rate in their serialization, so
+        # Asteroid reports its constructor default (8 kHz) even for a 16 kHz
+        # LibriMix model. The published model table is authoritative for those.
+        if model_id not in MODEL_TABLE:
+            sr = int(os.environ.get('ASTEROID_SAMPLE_RATE') or getattr(model, 'sample_rate', sr) or sr)
+        n_src = int(getattr(model, 'n_src', n_src))
+        work = audio if audio.sr == sr else resample(audio, sr)
 
         def run_block(block: np.ndarray) -> List[np.ndarray]:
+            if len(block) < 256:
+                block = np.pad(block, (0, 256 - len(block)))
             tensor = torch.from_numpy(np.ascontiguousarray(block)).float().unsqueeze(0).to(device)
-            with torch.no_grad():
+            with torch.inference_mode():
                 est = model.separate(tensor) if hasattr(model, "separate") else model(tensor)
             est = est.squeeze(0).cpu().numpy()  # (n_src, time)
             if est.ndim == 1:

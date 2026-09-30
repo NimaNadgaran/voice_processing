@@ -56,24 +56,19 @@ def dl_ecapa() -> str:
     except Exception:
         from speechbrain.pretrained import EncoderClassifier  # type: ignore
 
-    EncoderClassifier.from_hparams(
-        source="speechbrain/spkrec-ecapa-voxceleb",
-        savedir=str(PRETRAINED_DIR / "ecapa"),
-    )
+    from speechbrain.utils.fetching import LocalStrategy
+    EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb",
+        savedir=str(PRETRAINED_DIR / "ecapa"), local_strategy=LocalStrategy.COPY)
     return "ECAPA-TDNN speaker embeddings ready (improves speaker counting a lot)"
 
 
 def dl_sepformer() -> str:
-    try:
-        from speechbrain.inference.separation import SepformerSeparation  # type: ignore
-    except Exception:
-        from speechbrain.pretrained import SepformerSeparation  # type: ignore
-
+    from src.separation.methods.sepformer import SepFormerSeparator
+    backend = SepFormerSeparator()
+    backend.load()
     out = []
     for model_id in ("speechbrain/sepformer-whamr16k", "speechbrain/sepformer-wsj03mix"):
-        SepformerSeparation.from_hparams(
-            source=model_id, savedir=str(PRETRAINED_DIR / model_id.replace("/", "__"))
-        )
+        backend._get_model(model_id)
         out.append(model_id)
     return "SepFormer ready: " + ", ".join(out)
 
@@ -88,14 +83,9 @@ def dl_asteroid() -> str:
 
 
 def dl_pyannote() -> str:
-    import os
-
-    from pyannote.audio import Pipeline  # type: ignore
-
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
-    if not token:
-        raise RuntimeError("set HF_TOKEN and accept the model licences (see models/README.md)")
-    Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=token)
+    from src.separation.methods.pyannote_diarize import PyannoteDiarizationSeparator
+    backend = PyannoteDiarizationSeparator()
+    backend._ensure_loaded()
     return "pyannote 3.1 pipeline ready"
 
 
@@ -115,6 +105,13 @@ def dl_nemo() -> str:
 
 #  A module of None means "no package needed" -- the target fetches something
 #  self-contained and is always available.
+def dl_stt(method, language=None):
+    from src.core.registry import get_transcriber
+    backend = get_transcriber(method)
+    backend.load(language)
+    return backend.info.name + ' ready'
+
+
 TARGETS = {
     #  name            module to probe        size hint   downloader
     "deepfilternet": (None, "~27 MB", dl_deepfilternet),
@@ -126,6 +123,11 @@ TARGETS = {
     "pyannote": ("pyannote.audio", "~30 MB", dl_pyannote),
     "clearvoice": ("clearvoice", "~200 MB", dl_clearvoice),
     "nemo": ("nemo", "~90 MB", dl_nemo),
+    'faster_whisper': ('faster_whisper', '~500 MB', lambda: dl_stt('faster_whisper')),
+    'whisper_transformers': ('transformers', '~1 GB', lambda: dl_stt('whisper_transformers')),
+    'persian_wav2vec2': ('transformers', '~1.2 GB', lambda: dl_stt('persian_wav2vec2', 'fa')),
+    'vosk_en': ('vosk', '~40 MB', lambda: dl_stt('vosk', 'en')),
+    'vosk_fa': ('vosk', '~53 MB', lambda: dl_stt('vosk', 'fa')),
 }
 
 

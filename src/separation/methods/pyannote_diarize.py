@@ -1,4 +1,4 @@
-"""Method 4 -- pyannote.audio 3.1 diarization (best real-world N-speaker option).
+"""Method 4 -- version-matched pyannote.audio diarization.
 
 Install
 -------
@@ -6,8 +6,9 @@ Install
     pip install pyannote.audio
 
 Then, once, in a browser:
-1. accept the user conditions on huggingface.co/pyannote/speaker-diarization-3.1
-   and huggingface.co/pyannote/segmentation-3.0  (both free),
+1. On pyannote.audio 4.x accept the conditions for
+   huggingface.co/pyannote/speaker-diarization-community-1. On 3.x accept
+   speaker-diarization-3.1 and segmentation-3.0,
 2. create a read token and ``set HF_TOKEN=hf_xxx``.
 
 Why it is the best default for meetings
@@ -28,6 +29,7 @@ speakers rather than being acoustically unmixed.
 from __future__ import annotations
 
 import os
+from importlib.metadata import PackageNotFoundError, version
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -47,11 +49,24 @@ def _token() -> str:
     return ""
 
 
+def pipeline_checkpoint():
+    override = os.environ.get('PYANNOTE_PIPELINE', '').strip()
+    if override:
+        return override
+    try:
+        major = int(version('pyannote.audio').split('.')[0])
+    except (PackageNotFoundError, ValueError):
+        major = 3
+    # 4.x changed pipeline internals as well as the auth keyword. Pair it with
+    # its own config instead of accidentally mixing the 3.1 and 4.x pipelines.
+    return 'pyannote/speaker-diarization-community-1' if major >= 4 else 'pyannote/speaker-diarization-3.1'
+
+
 @register_separator
 class PyannoteDiarizationSeparator(BaseSeparator):
     info = MethodInfo(
         key="pyannote",
-        name="pyannote.audio 3.1",
+        name="pyannote.audio diarization",
         kind="separate",
         family="deep-pretrained",
         description=(
@@ -87,10 +102,10 @@ class PyannoteDiarizationSeparator(BaseSeparator):
         # Once the wheel is in, the only thing left is the token + licence --
         # printing the full pip line again just buries the step that is missing.
         info = super().describe()
-        if not info.available and module_available("pyannote.audio") and module_available("torch"):
+        if module_available("pyannote.audio") and module_available("torch"):
             info.install_hint = (
-                "accept the free licence on huggingface.co/pyannote/speaker-diarization-3.1 "
-                "and huggingface.co/pyannote/segmentation-3.0, then set HF_TOKEN=hf_xxx"
+                "accept the model licence at huggingface.co/" + pipeline_checkpoint() +
+                ", then set HF_TOKEN=hf_xxx for that account"
             )
         return info
 
@@ -98,7 +113,8 @@ class PyannoteDiarizationSeparator(BaseSeparator):
         import torch  # type: ignore
         from pyannote.audio import Pipeline  # type: ignore
 
-        checkpoint = os.environ.get("PYANNOTE_PIPELINE", "pyannote/speaker-diarization-3.1")
+        checkpoint = pipeline_checkpoint()
+        self._checkpoint = checkpoint
         # pyannote.audio 4.x renamed the auth argument use_auth_token -> token.
         try:
             pipeline = Pipeline.from_pretrained(checkpoint, token=_token())
@@ -129,11 +145,13 @@ class PyannoteDiarizationSeparator(BaseSeparator):
 
         per_speaker: dict = {}
         for turn, _, speaker in annotation.itertracks(yield_label=True):
-            per_speaker.setdefault(speaker, []).append([float(turn.start), float(turn.end)])
+            start, end = max(0., float(turn.start)), min(audio.duration, float(turn.end))
+            if end > start:
+                per_speaker.setdefault(speaker, []).append([start, end])
 
         if not per_speaker:
             return [audio.samples.copy()], {
-                "backend": "pyannote-3.1",
+                "backend": "pyannote",
                 "confidence": 0.3,
                 "metrics": {"note": "pipeline found no speech"},
             }
@@ -149,12 +167,13 @@ class PyannoteDiarizationSeparator(BaseSeparator):
             seg_lists.append(segs)
             labels.append("Speaker %d (%s)" % (i + 1, speaker))
 
+        from ..diarization import merge_turns, overlap_ratio
+        seg_lists = [merge_turns(segs, audio.duration) for segs in seg_lists]
         talk = [sum(e - s for s, e in segs) for segs in seg_lists]
-        total = sum(talk) or 1.0
-        overlap = max(0.0, total / max(audio.duration, 1e-6) - 1.0)
+        overlap = overlap_ratio(seg_lists, audio.duration)
 
         return sources, {
-            "backend": "pyannote-3.1",
+            "backend": "pyannote",
             "confidence": 0.9,
             "labels": labels,
             "segments": seg_lists,
@@ -164,6 +183,6 @@ class PyannoteDiarizationSeparator(BaseSeparator):
                 "talk_time_seconds": [round(t, 2) for t in talk],
                 "turns_per_speaker": [len(s) for s in seg_lists],
                 "estimated_overlap_ratio": round(float(overlap), 4),
-                "pipeline": os.environ.get("PYANNOTE_PIPELINE", "pyannote/speaker-diarization-3.1"),
+                "pipeline": getattr(self, '_checkpoint', pipeline_checkpoint()),
             },
         }

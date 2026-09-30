@@ -1,4 +1,4 @@
-"""The orchestrator: upload -> denoise -> count speakers -> separate -> report.
+"""The orchestrator: upload -> denoise -> count speakers -> separate -> transcribe -> report.
 
 One :class:`PipelineRunner` handles one job, which may execute several *paths*
 over the same input so the frontend can compare them.
@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Literal
 
 from ..core.audio_io import load_audio, save_audio, waveform_preview
@@ -61,6 +61,25 @@ class PipelineOptions(BaseModel):
     waveform_points: int = Field(default=500, ge=1, le=10000)
     normalize_tracks: bool = False
     keep_intermediate: bool = True
+    transcription_method: str = 'none'  # GUI enables auto; legacy API calls remain audio-only
+    transcription_language: str = 'auto'
+
+    @field_validator('transcription_method')
+    @classmethod
+    def valid_transcriber(cls, value):
+        if value not in ('auto', 'none'):
+            from ..core.registry import get_transcriber
+            try:
+                get_transcriber(value)
+            except KeyError as exc:
+                raise ValueError('Unknown speech-to-text method: ' + value) from exc
+        return value
+
+    @field_validator('transcription_language')
+    @classmethod
+    def valid_language(cls, value):
+        from ..transcription.languages import normalize_language
+        return normalize_language(value) or 'auto'
 
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "PipelineOptions":
@@ -183,6 +202,8 @@ class PipelineRunner:
                 "num_speakers": options.num_speakers,
                 "max_speakers": options.max_speakers,
                 "count_on": options.count_on,
+                'transcription_method': options.transcription_method,
+                'transcription_language': options.transcription_language,
             },
             "paths": results,
             "out_dir": str(self.out_dir),
@@ -301,7 +322,7 @@ class PipelineRunner:
 
             def s_progress(pct: float, msg: str) -> None:
                 self.emit(stage="separate", path_id=path.id,
-                          pct=base + span * (0.45 + 0.45 * pct), message=msg)
+                          pct=base + span * (0.45 + 0.25 * pct), message=msg)
 
             sep = run_separate(
                 clean, method=path.separator, num_speakers=n_speakers,
@@ -330,7 +351,7 @@ class PipelineRunner:
                 entry["snr"] = estimated_snr(track.audio)
                 tracks.append(entry)
                 self.emit(
-                    stage="separate", path_id=path.id, pct=base + 0.9 * span,
+                    stage="separate", path_id=path.id, pct=base + 0.7 * span,
                     artifact={"kind": "speaker", "path_id": path.id, "file": file_name, "index": track.index},
                     message="wrote %s (%.1fs of speech)" % (entry["label"], entry["total_speech"]),
                 )
@@ -358,6 +379,52 @@ class PipelineRunner:
             record["failed_stage"] = "separate"
             self.emit(stage="error", path_id=path.id, pct=base + span,
                       message=info["message"], fix=info["fix"])
+
+        # ---------------- transcribe each isolated speaker --------------- #
+        # A failed recognizer must not throw away already exported speaker audio.
+        if record['status'] == 'ok':
+            from ..transcription import transcribe
+            from ..transcription.base import write_transcript
+            method = path.transcriber or options.transcription_method
+            started_stt = time.perf_counter()
+            states = []
+            for position, (track, entry) in enumerate(zip(sep.tracks, record['tracks'])):
+                def t_progress(pct, msg, position=position):
+                    self.emit(stage='transcribe', path_id=path.id,
+                              pct=base + span * (.72 + .25 * (position + pct) / max(1, len(sep.tracks))),
+                              message=entry['label'] + ': ' + msg)
+                result = transcribe(track.audio, method=method, language=options.transcription_language,
+                                    regions=track.segments, progress=t_progress)
+                data = result.to_dict()
+                states.append(result.status)
+                if result.status in ('ok', 'empty'):
+                    filename = '%s__%s__03_speaker%02d_%s.txt' % (self.stem, path.id, track.index + 1, result.method)
+                    try:
+                        write_transcript(path_dir / filename, result)
+                    except Exception as exc:
+                        log_exception('transcript-export:' + path.id, exc)
+                        info = describe_exception(exc, 'transcript export')
+                        data.update(status='failed', error=info['message'], error_fix=info['fix'])
+                        states[-1] = 'failed'
+                        entry['transcription'] = data
+                        self.emit(stage='transcribe', path_id=path.id, message=info['message'], fix=info['fix'])
+                        continue
+                    data.update(file=filename, path=str(path_dir / filename))
+                    self.emit(stage='transcribe', path_id=path.id,
+                              pct=base + span * (.72 + .25 * (position + 1) / max(1, len(sep.tracks))),
+                              artifact={'kind': 'transcript', 'path_id': path.id, 'file': filename,
+                                        'index': track.index, 'text': result.text[:2000], 'language': result.language,
+                                        'warnings': result.metrics.get('warnings', [])},
+                              message='Transcript written for ' + entry['label'])
+                elif result.status == 'failed':
+                    self.emit(stage='transcribe', path_id=path.id, message=entry['label'] + ': ' + result.error,
+                              fix=result.error_fix)
+                entry['transcription'] = data
+            record['transcription'] = dict(method=method, language=options.transcription_language,
+                status='disabled' if method == 'none' else 'partial' if 'failed' in states and any(s in ('ok', 'empty') for s in states)
+                else 'failed' if 'failed' in states else 'ok',
+                elapsed=round(time.perf_counter() - started_stt, 3))
+            record['timings']['transcribe'] = record['transcription']['elapsed']
 
         total.__exit__()
         record["timings"]["total"] = round(total.elapsed, 3)

@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..core.registry import get_denoiser, get_separator
+from ..core.registry import get_denoiser, get_separator, get_transcriber
 from ..core.utils import validate_component
 
 
@@ -43,9 +43,12 @@ class PipelinePath:
     avoid_when: str = ""    # when to pick something else instead
     detail: str = ""        # a paragraph explaining the pairing
     output: str = ""        # what you get out of it
+    transcriber: str = ""  # empty inherits the job's stage-3 setting
 
     def __post_init__(self) -> None:
         validate_component(self.id)
+        if self.transcriber not in ('', 'auto', 'none'):
+            get_transcriber(self.transcriber)
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -101,7 +104,7 @@ PRESET_PATHS: List[PipelinePath] = [
         # dead card, fall back to the best backend that is actually installed.
         denoiser_alts=["demucs_denoiser", "rnnoise", "spectral_gate"],
         separator_alts=["diarize_cluster"],
-        tagline="DeepFilterNet 3 -> pyannote 3.1",
+        tagline="DeepFilterNet 3 -> pyannote diarization",
         badge="best for meetings",
         description=(
             "The pairing most real recordings want: SOTA neural denoising, then the "
@@ -124,23 +127,23 @@ PRESET_PATHS: List[PipelinePath] = [
     PipelinePath(
         id="path3",
         name="Cocktail party",
-        denoiser="deepfilternet",
-        separator="sepformer",
-        denoiser_alts=["demucs_denoiser", "rnnoise", "spectral_gate"],
-        tagline="DeepFilterNet 3 -> SepFormer",
+        denoiser="wiener_mmse",
+        separator="convtasnet_asteroid",
+        separator_alts=["sepformer"],
+        tagline="MMSE-LSA -> Conv-TasNet (Asteroid)",
         badge="handles overlap",
         description=(
-            "For people genuinely talking over each other. SepFormer acoustically "
+            "For people genuinely talking over each other. Conv-TasNet acoustically "
             "unmixes simultaneous speech instead of just cutting the timeline."
         ),
         best_for=(
             "Two or three people genuinely talking at the same time, most of the time."
         ),
         avoid_when=(
-            "You have four or more speakers -- no open separation model outputs four sources."
+            "You have four or more speakers -- these pretrained checkpoints output only two or three sources."
         ),
         detail=(
-            "This is the only kind of path that truly unmixes overlapping voices. Diarization can only say 'both of you are talking now'; SepFormer reconstructs each voice as a complete, continuous signal, even underneath the other person. The cost is that the number of outputs is baked into the model weights (2 or 3), it is slow, and it was trained on clean studio mixtures -- which is exactly why DeepFilterNet runs first."
+            "Conv-TasNet unmixes overlapping voices rather than only attributing turns. Gentle MMSE-LSA runs first: single-speaker neural denoisers can suppress the second voice before a separator gets it. The 16 kHz LibriMix checkpoint is the default, with SepFormer as an installed-backend fallback. Output count is fixed at two or three; quality depends on the recording. See AUDIO_VALIDATION.md for the reference-based pipeline comparison."
         ),
         output=(
             "One denoised file, plus 2-3 continuously separated voices (not turn-cut)."
@@ -154,9 +157,9 @@ PRESET_PATHS: List[PipelinePath] = [
         tagline="MMSE-LSA -> clustering diarization",
         badge="most natural",
         description=(
-            "Zero machine learning. The MMSE-LSA estimator never invents artefacts, "
-            "so it is the safest choice when the audio will be used as evidence or "
-            "fed to a transcriber."
+            "Zero machine learning. Conservative statistical suppression followed "
+            "by turn-based clustering. No generative speech reconstruction, but "
+            "filtering can still distort speech: retain the original recording."
         ),
         best_for=(
             "Audio used as evidence, transcribed, or analysed -- anywhere invented detail is unacceptable."
@@ -377,7 +380,7 @@ def resolve_path(spec: Dict[str, Any]) -> PipelinePath:
 
     path_id = str(spec.get("id") or "").strip()
     if path_id and path_id in PRESETS_BY_ID and not (spec.get("denoiser") or spec.get("separator")):
-        return PRESETS_BY_ID[path_id]
+        return replace(PRESETS_BY_ID[path_id], transcriber=str(spec['transcriber'])) if 'transcriber' in spec else PRESETS_BY_ID[path_id]
 
     denoiser = str(spec.get("denoiser") or "none")
     separator = str(spec.get("separator") or "diarize_cluster")
@@ -392,4 +395,5 @@ def resolve_path(spec: Dict[str, Any]) -> PipelinePath:
         description="User-defined combination.",
         badge="custom",
         preset=False,
+        transcriber=str(spec.get('transcriber') or ''),
     )

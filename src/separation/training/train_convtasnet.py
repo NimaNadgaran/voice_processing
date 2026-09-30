@@ -104,6 +104,7 @@ def main() -> int:
     ap.add_argument("--resume", default=None)
     ap.add_argument("--max-hours", type=float, default=None)
     ap.add_argument("--estimate-only", action="store_true")
+    ap.add_argument("--estimate-json", default=None)
     args = ap.parse_args()
 
     try:
@@ -135,6 +136,8 @@ def main() -> int:
         value = getattr(args, key, None)
         if value is not None:
             cfg[key] = value
+    if any(int(cfg[key]) <= 0 for key in ('epochs', 'steps_per_epoch', 'batch_size', 'val_items')):
+        raise ValueError('epochs, steps_per_epoch, batch_size, and val_items must be positive')
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(cfg["seed"])
@@ -151,7 +154,7 @@ def main() -> int:
     consistency = MixtureConsistencyLoss().to(device)
     optimiser = torch.optim.Adam(model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode="max", factor=0.5, patience=5)
-    use_amp = bool(cfg["amp"]) and device == "cuda"
+    use_amp = bool(cfg["amp"]) and str(device).startswith("cuda")
     try:  # torch >= 2.4
         scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     except (AttributeError, TypeError):  # torch < 2.4
@@ -163,26 +166,29 @@ def main() -> int:
         model.load_state_dict(ckpt["model"])
         if "optimiser" in ckpt:
             optimiser.load_state_dict(ckpt["optimiser"])
+        if "scheduler" in ckpt:
+            scheduler.load_state_dict(ckpt["scheduler"])
+        if "scaler" in ckpt:
+            scaler.load_state_dict(ckpt["scaler"])
         start_epoch = int(ckpt.get("epoch", 0))
-        best = float(ckpt.get("val_si_sdr", -1e9))
+        best = float(ckpt.get("best_val_si_sdr", ckpt.get("val_si_sdr", -1e9)))
         print(" resumed from %s at epoch %d (best %.2f dB)" % (args.resume, start_epoch, best))
-
-    out_dir = ROOT / cfg["out_dir"]
-    out_dir.mkdir(parents=True, exist_ok=True)
-    writer = SummaryWriter(str(ROOT / "runs" / cfg["run_name"]))
 
     # ---------------- measured ETA ----------------------------------------- #
     print("\n timing the first steps to estimate the real cost...")
-    per_step = _time_steps(model, criterion, consistency, optimiser, scaler,
-                           train_loader, device, use_amp, cfg)
-    steps_total = cfg["steps_per_epoch"] * cfg["epochs"]
-    eta_hours = per_step * steps_total / 3600.0
-    print(" measured %.3f s/step -> %d steps -> ETA %s (+ validation)"
-          % (per_step, steps_total, _fmt_hours(eta_hours)))
-    print(" that is %s per epoch" % _fmt_hours(per_step * cfg["steps_per_epoch"] / 3600.0))
+    from src.core.training_runtime import measured_estimate, report_remaining, write_estimate
+    estimate = measured_estimate(model, optimiser, scaler,
+        lambda: _time_steps(model, criterion, consistency, optimiser, scaler, train_loader, device, use_amp, cfg),
+        lambda batches: _validate(model, criterion, batches, device), val_loader, cfg,
+        start_epoch, args.estimate_json)
+    eta_hours = estimate['remaining_seconds'] / 3600
     if args.estimate_only:
         print("\n --estimate-only: stopping before training. Nothing was trained.")
         return 0
+    out_dir = ROOT / cfg["out_dir"]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    writer = SummaryWriter(str(ROOT / "runs" / cfg["run_name"]))
+    training_start = time.monotonic()
     if eta_hours > 24:
         print("\n ! longer than a day. Consider --preset tiny, fewer steps, or a GPU.")
         print("   starting in 5 s (ctrl-C to abort)...")
@@ -233,14 +239,19 @@ def main() -> int:
         writer.add_scalar("val/si_sdri_db", val["si_sdri"], epoch)
         print(" epoch %3d done in %s | train loss %.4f | val SI-SDR %.2f dB | SI-SDRi %+.2f dB"
               % (epoch + 1, _fmt_hours((time.time() - epoch_start) / 3600.0),
-                 running / max(1, cfg["steps_per_epoch"]), val["si_sdr"], val["si_sdri"]))
+                 running / max(1, step + 1), val["si_sdr"], val["si_sdri"]))
 
         payload = {
             "model": model.state_dict(),
             "optimiser": optimiser.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "scaler": scaler.state_dict(),
             "config": {**cfg, "arch": "ConvTasNet"},
-            "epoch": epoch + 1,
+            # Resume from partial weights without skipping the unfinished epoch.
+            "epoch": epoch + 1 if step + 1 >= cfg['steps_per_epoch'] else epoch,
+            "steps_in_epoch": step + 1,
             "val_si_sdr": val["si_sdr"],
+            "best_val_si_sdr": max(best, val["si_sdr"]),
             "val_si_sdri": val["si_sdri"],
             "params_m": params_m,
         }
@@ -251,10 +262,16 @@ def main() -> int:
             print("   ^ new best -> %s" % (out_dir / "separation_convtasnet_best.pt"))
         if stop:
             break
+        report_remaining(time.monotonic() - training_start, epoch + 1 - start_epoch,
+                         cfg['epochs'] - epoch - 1)
 
     writer.close()
+    if args.estimate_json:
+        estimate.update(completed_epochs=payload['epoch'] if cfg['epochs'] > start_epoch else start_epoch,
+                        stopped_early=stop, training_seconds=time.monotonic() - training_start)
+        write_estimate(args.estimate_json, estimate)
     print("\n finished. best val SI-SDR %.2f dB" % best)
-    print(" the app will now list 'Local Conv-TasNet (your model)' as available.")
+    print(" checkpoint directory: %s" % out_dir)
     return 0
 
 
@@ -263,12 +280,9 @@ def _time_steps(model, criterion, consistency, optimiser, scaler, loader, device
     import torch
 
     model.train()
-    times = []
-    for i, (mixture, sources) in enumerate(loader):
-        if i >= n_steps:
-            break
+    def step(batch):
+        mixture, sources = batch
         mixture, sources = mixture.to(device), sources.to(device)
-        t0 = time.perf_counter()
         optimiser.zero_grad(set_to_none=True)
         with torch.autocast(device_type="cuda", enabled=use_amp):
             est = model(mixture)
@@ -278,11 +292,8 @@ def _time_steps(model, criterion, consistency, optimiser, scaler, loader, device
         scaler.scale(loss).backward()
         scaler.step(optimiser)
         scaler.update()
-        if device == "cuda":
-            torch.cuda.synchronize()
-        times.append(time.perf_counter() - t0)
-    stable = times[2:] or times
-    return sum(stable) / max(len(stable), 1)
+    from src.core.training_runtime import time_batches
+    return time_batches(step, loader, device, n_steps)
 
 
 def _validate(model, criterion, loader, device) -> Dict[str, float]:

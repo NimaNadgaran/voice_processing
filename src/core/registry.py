@@ -25,6 +25,7 @@ from .types import MethodInfo
 
 DENOISERS: Dict[str, Type[Any]] = {}
 SEPARATORS: Dict[str, Type[Any]] = {}
+TRANSCRIBERS: Dict[str, Type[Any]] = {}
 
 _INSTANCES: Dict[str, Any] = {}
 _LOCK = threading.Lock()
@@ -50,6 +51,14 @@ def register_separator(cls: Type[Any]) -> Type[Any]:
     return cls
 
 
+def register_transcriber(cls: Type[Any]) -> Type[Any]:
+    key = cls.info.key
+    if key in TRANSCRIBERS:
+        raise ValueError('duplicate transcriber key: ' + key)
+    TRANSCRIBERS[key] = cls
+    return cls
+
+
 # --------------------------------------------------------------------------- #
 #  discovery
 # --------------------------------------------------------------------------- #
@@ -63,6 +72,7 @@ def load_all() -> None:
             return
         import src.denoising.methods  # noqa: F401  (side-effect import)
         import src.separation.methods  # noqa: F401
+        import src.transcription.methods  # noqa: F401
 
         _LOADED = True
 
@@ -93,18 +103,23 @@ def get_separator(key: str) -> Any:
     return _get(SEPARATORS, key, "separator")
 
 
+def get_transcriber(key: str) -> Any:
+    return _get(TRANSCRIBERS, key, 'transcriber')
+
+
 def _describe(table: Dict[str, Type[Any]], only_available: bool) -> List[MethodInfo]:
     load_all()
     out: List[MethodInfo] = []
     for key in table:
         try:
-            inst = _get(table, key, "denoiser" if table is DENOISERS else "separator")
+            kind = 'denoiser' if table is DENOISERS else 'separator' if table is SEPARATORS else 'transcriber'
+            inst = _get(table, key, kind)
             info = inst.describe()
         except Exception as exc:  # a broken plugin must never hide the others
             info = MethodInfo(
                 key=key,
                 name=key,
-                kind="denoise" if table is DENOISERS else "separate",
+                kind="denoise" if table is DENOISERS else "separate" if table is SEPARATORS else 'transcribe',
                 family="unknown",
                 description="failed to initialise",
                 available=False,
@@ -124,6 +139,10 @@ def list_denoisers(only_available: bool = False) -> List[MethodInfo]:
 
 def list_separators(only_available: bool = False) -> List[MethodInfo]:
     return _describe(SEPARATORS, only_available)
+
+
+def list_transcribers(only_available: bool = False) -> List[MethodInfo]:
+    return _describe(TRANSCRIBERS, only_available)
 
 
 def first_available(keys: List[str], kind: str = "denoise") -> Optional[str]:

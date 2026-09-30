@@ -175,6 +175,8 @@ class ConvTasNet(nn.Module):
         return out[..., :length]
 
     def _pad_amount(self, length: int) -> int:
+        if length < self.enc_kernel:
+            return self.enc_kernel - length
         stride = self.stride
         rest = (length - self.enc_kernel) % stride
         return 0 if rest == 0 else stride - rest

@@ -13,7 +13,7 @@ const SPEAKER_COLORS = ['#5eead4', '#7c9cff', '#f0abfc', '#fbbf24', '#4ade80', '
 
 const state = {
   file: null,
-  methods: { denoisers: [], separators: [] },
+  methods: { denoisers: [], separators: [], transcribers: [], languages: [] },
   paths: [],
   selected: new Set(['path1']),
   custom: [],            // [{id, denoiser, separator}] -- the builder rows
@@ -228,6 +228,7 @@ async function loadMethodsAndPaths() {
     state.paths = paths.paths || [];
     renderPaths();
     renderMethodBrowser();
+    renderTranscriptionOptions();
     renderCustomRows();
   } catch (err) {
     $('#path-grid').innerHTML = '<div class="skeleton">could not reach the backend — is <code>python run.py serve</code> running?</div>';
@@ -237,7 +238,7 @@ async function loadMethodsAndPaths() {
 /* ------------------------------------------------------------------ paths */
 /** Look a method up in the loaded method list (for the detail panels). */
 function findMethod(kind, key) {
-  const list = kind === 'denoise' ? state.methods.denoisers : state.methods.separators;
+  const list = kind === 'denoise' ? state.methods.denoisers : kind === 'separate' ? state.methods.separators : state.methods.transcribers;
   return (list || []).find((m) => m.key === key) || null;
 }
 
@@ -248,7 +249,7 @@ function stageDetail(kind, key) {
   return `
     <div class="stage-detail">
       <div class="sd-head">
-        <span class="sd-kind">${kind === 'denoise' ? 'denoise' : 'separate'}</span>
+        <span class="sd-kind">${esc(kind)}</span>
         <span class="sd-name">${esc(m.name)}</span>
         ${m.latency ? `<span class="chip">${esc(m.latency)}</span>` : ''}
         <span class="chip ${m.available ? 'good' : 'warn'}">${m.available ? 'installed' : 'not installed'}</span>
@@ -363,7 +364,7 @@ function renderMethodBrowser() {
         ${m.how_it_works ? `
           <details class="pc-more">
             <summary>How ${esc(m.name)} works</summary>
-            <div class="detail-body">${stageDetail(m.kind === 'denoise' ? 'denoise' : 'separate', m.key)}</div>
+            <div class="detail-body">${stageDetail(m.kind, m.key)}</div>
           </details>` : ''}
       `;
       box.appendChild(node);
@@ -371,6 +372,60 @@ function renderMethodBrowser() {
   };
   render(state.methods.denoisers || [], '#denoiser-list');
   render(state.methods.separators || [], '#separator-list');
+  render(state.methods.transcribers || [], '#transcriber-list');
+}
+
+function transcriptionOptions(selected, inherit = false) {
+  const special = (inherit ? [['', 'Use stage-3 setting']] : [])
+    .concat([['auto', 'Automatic — installed multilingual model'], ['none', 'No speech-to-text']]);
+  return special.map(([key, name]) => `<option value="${key}"${key === selected ? ' selected' : ''}>${name}</option>`).join('')
+    + methodOptions(state.methods.transcribers, selected);
+}
+
+function renderTranscriptionOptions() {
+  const method = localStorage.getItem('ds-stt-method') || 'auto';
+  $('#opt-transcriber').innerHTML = transcriptionOptions(method);
+  $('#opt-language').innerHTML = (state.methods.languages || []).map((language) =>
+    `<option value="${esc(language.code)}">${esc(language.name)}</option>`).join('');
+  $('#opt-language').value = localStorage.getItem('ds-stt-language') || 'auto';
+  if (!$('#opt-language').value) $('#opt-language').value = 'auto';
+  updateTranscriptionHint();
+}
+
+function updateTranscriptionHint() {
+  const key = $('#opt-transcriber').value;
+  const method = findMethod('transcribe', key);
+  const language = $('#opt-language');
+  // Overrides are real stage-3 choices too: a Vosk row must not inherit an
+  // unsupported automatic language, nor lose its language control when the
+  // global recognizer is off.
+  const keys = [...new Set(selectedSpecs().map((spec) => spec.transcriber || key))];
+  if (!keys.length) keys.push(key);
+  const constraints = keys.map((value) => findMethod('transcribe', value)).filter(Boolean);
+  const specific = method && method.supported_languages && method.supported_languages.length === 1;
+  const chosen = language.value || 'auto';
+  Array.from(language.options).forEach((option) => {
+    option.disabled = constraints.some((model) => option.value === 'auto'
+      ? !model.supports_auto_language && model.supported_languages.length !== 1
+      : !model.supported_languages.includes(option.value));
+  });
+  if (language.selectedOptions[0] && language.selectedOptions[0].disabled) {
+    const allowed = Array.from(language.options).filter((option) => !option.disabled);
+    language.value = (allowed.find((option) => option.value === 'fa') || allowed[0] || {}).value || '';
+  }
+  language.disabled = keys.every((value) => value === 'none');
+  $('#stt-method-hint').textContent = key === 'none' ? 'Global transcription is off; explicit custom-row recognizers still run.'
+    : key === 'auto' ? ((state.methods.transcribers || []).some((m) => m.available)
+      ? 'Chooses an installed local model compatible with the spoken language. First use may download weights.'
+      : 'No recognizer installed yet: pip install -r requirements-stt.txt. Audio outputs remain available.')
+      : `${method ? method.description : ''} ${method ? method.notes : ''}`;
+  $('#stt-language-hint').textContent = specific && chosen === 'auto'
+    ? 'This specialist assumes Persian; it does not detect the language. Use Whisper for other languages.'
+    : constraints.some((model) => !model.supports_auto_language && model.supported_languages.length > 1)
+      ? 'A selected path uses Vosk: choose English or Persian explicitly. The language applies to every selected path.'
+      : 'The spoken language is preserved. Language choices must suit every selected path; auto can be unreliable on short turns.';
+  localStorage.setItem('ds-stt-method', key);
+  localStorage.setItem('ds-stt-language', language.value);
 }
 
 /* ------------------------------------------------- custom path builder */
@@ -390,7 +445,8 @@ function methodAvailable(kind, key) {
 
 /** Display name for a custom row, e.g. "DeepFilterNet 3 + pyannote 3.1". */
 function customName(row) {
-  return `${methodName('denoise', row.denoiser)} + ${methodName('separate', row.separator)}`;
+  const stt = row.transcriber ? ` + ${row.transcriber === 'auto' ? 'Auto speech-to-text' : row.transcriber === 'none' ? 'No speech-to-text' : methodName('transcribe', row.transcriber)}` : '';
+  return `${methodName('denoise', row.denoiser)} + ${methodName('separate', row.separator)}${stt}`;
 }
 
 /** First installed method, preferring `preferred` when it is installed. */
@@ -404,6 +460,7 @@ function newRow() {
     id: `custom_${++state.rowSeq}`,
     denoiser: firstUsable(state.methods.denoisers, 'spectral_gate'),
     separator: firstUsable(state.methods.separators, 'diarize_cluster'),
+    transcriber: '',
   };
 }
 
@@ -429,20 +486,23 @@ function rowNote(row, index) {
   const dn = methodName('denoise', row.denoiser);
   const sn = methodName('separate', row.separator);
   const twin = state.custom.findIndex(
-    (c, i) => i < index && c.denoiser === row.denoiser && c.separator === row.separator,
+    (c, i) => i < index && c.denoiser === row.denoiser && c.separator === row.separator && (c.transcriber || '') === (row.transcriber || ''),
   );
   if (twin >= 0) return `Same combination as path ${twin + 1} — it would run twice.`;
+  const stt = row.transcriber === 'none' ? 'Text disabled for this row.'
+    : !row.transcriber ? 'Speech-to-text follows the stage-3 setting.'
+      : `Stage 3 uses ${row.transcriber === 'auto' ? 'automatic recognition' : methodName('transcribe', row.transcriber)} on each output voice.`;
   if (row.denoiser === 'none' && row.separator === 'none') {
-    return 'Nothing happens: the file is copied through untouched.';
+    return `Audio is copied through untouched as one voice. ${stt}`;
   }
-  if (row.separator === 'none') return `${dn} cleans the audio and hands it back as one file.`;
-  if (row.denoiser === 'none') return `No cleaning — ${sn} runs straight on the raw audio.`;
-  return `${dn} cleans the audio, then ${sn} splits the speakers.`;
+  if (row.separator === 'none') return `${dn} cleans the audio and hands it back as one file. ${stt}`;
+  if (row.denoiser === 'none') return `No cleaning — ${sn} runs straight on the raw audio. ${stt}`;
+  return `${dn} cleans the audio, then ${sn} splits the speakers. ${stt}`;
 }
 
 function blockersFor(row) {
   const out = [];
-  [['denoise', row.denoiser], ['separate', row.separator]].forEach(([kind, key]) => {
+  [['denoise', row.denoiser], ['separate', row.separator], ['transcribe', row.transcriber]].forEach(([kind, key]) => {
     const m = findMethod(kind, key);
     if (m && !m.available) out.push(`${m.name}: ${m.unavailable_reason || 'not installed'}`);
   });
@@ -480,6 +540,11 @@ function renderCustomRows() {
         <span>Separation module</span>
         <select class="crow-sep">${methodOptions(state.methods.separators, row.separator)}</select>
       </label>
+      <span class="arrow">&rarr;</span>
+      <label class="crow-field">
+        <span>Speech-to-text module</span>
+        <select class="crow-stt">${transcriptionOptions(row.transcriber || '', true)}</select>
+      </label>
       <button class="crow-del" type="button" aria-label="remove path ${index + 1}" title="remove this row">&#10005;</button>
       <div class="crow-note${blockers.length ? ' warn' : ''}">${
         blockers.length ? esc(`Not ready — ${blockers.join(' · ')}`) : esc(rowNote(row, index))
@@ -509,6 +574,12 @@ function renderCustomRows() {
     });
 
     node.querySelector('.crow-del').addEventListener('click', () => removeCustomRow(row.id));
+    node.querySelector('.crow-stt').addEventListener('change', (ev) => {
+      row.transcriber = ev.target.value;
+      renderCustomRows();
+      persistSelection();
+      updateRunState();
+    });
     box.appendChild(node);
   });
 
@@ -534,7 +605,7 @@ function restoreSelection() {
       // keep only what a row actually needs; older builds stored a `name` too
       state.custom = custom
         .filter((c) => c && c.id && c.denoiser && c.separator)
-        .map((c) => ({ id: String(c.id), denoiser: String(c.denoiser), separator: String(c.separator) }));
+        .map((c) => ({ id: String(c.id), denoiser: String(c.denoiser), separator: String(c.separator), transcriber: String(c.transcriber || '') }));
       state.custom.forEach((c) => {
         const n = /^custom_(\d+)$/.exec(c.id);
         if (n) state.rowSeq = Math.max(state.rowSeq, Number(n[1]));
@@ -657,6 +728,8 @@ async function setFile(file) {
 function wireControls() {
   $('#add-row').addEventListener('click', addCustomRow);
   $('#run-btn').addEventListener('click', startJob);
+  $('#opt-transcriber').addEventListener('change', updateTranscriptionHint);
+  $('#opt-language').addEventListener('change', updateTranscriptionHint);
   window.addEventListener('resize', debounce(redrawAllWaves, 180));
 }
 
@@ -676,13 +749,14 @@ function selectedSpecs() {
   const specs = [];
   state.selected.forEach((id) => {
     const custom = state.custom.find((c) => c.id === id);
-    if (custom) specs.push({ id: custom.id, name: customName(custom), denoiser: custom.denoiser, separator: custom.separator });
+    if (custom) specs.push({ id: custom.id, name: customName(custom), denoiser: custom.denoiser, separator: custom.separator, transcriber: custom.transcriber || '' });
     else specs.push({ id });
   });
   return specs;
 }
 
 function updateRunState() {
+  if ($('#opt-language').options.length) updateTranscriptionHint();
   const count = state.selected.size;
   const ready = Boolean(state.file) && count > 0;
   $('#run-btn').disabled = !ready || Boolean(state.polling);
@@ -704,6 +778,8 @@ async function startJob() {
     num_speakers: $('#opt-speakers').value ? Number($('#opt-speakers').value) : null,
     count_on: $('#opt-count-on').value,
     normalize_tracks: $('#opt-normalize').checked,
+    transcription_method: $('#opt-transcriber').value,
+    transcription_language: $('#opt-language').value,
   }));
 
   setRunning(true);
@@ -899,6 +975,7 @@ function handleArtifact(ev) {
     const color = SPEAKER_COLORS[(art.index || 0) % SPEAKER_COLORS.length];
     const row = el('div', 'speaker-row');
     row.dataset.file = art.file;
+    row.dataset.speakerIndex = String(art.index || 0);
     row.innerHTML = `
       <div class="sp-id">
         <div class="sp-name"><span class="sp-swatch" style="background:${color}"></span>Speaker ${(art.index || 0) + 1}</div>
@@ -910,6 +987,17 @@ function handleArtifact(ev) {
       </div>`;
     rows.appendChild(row);
     box.querySelector('[data-role="spk-count"]').textContent = `${rows.children.length} found`;
+  }
+  if (art.kind === 'transcript') {
+    const row = card.querySelector(`[data-speaker-index="${Number(art.index) || 0}"] .sp-right`);
+    if (row) {
+      let box = row.querySelector('.transcript-box');
+      if (!box) { box = el('div', 'transcript-box'); row.appendChild(box); }
+      box.innerHTML = `<div class="transcript-head"><b>3. Speech-to-text</b><span class="chip">${esc(art.language || 'auto')}</span>
+        <a class="ghost-btn" href="${url}" download="${esc(art.file)}">Download text file</a></div>
+        ${(art.warnings || []).map((message) => `<p class="transcript-warning">${esc(message)}</p>`).join('')}
+        <pre class="transcript-text" dir="auto">${esc(art.text || 'No speech recognized.')}</pre>`;
+    }
   }
 }
 
@@ -943,7 +1031,8 @@ function renderResultCard(path, report) {
       <span class="step">${path.status === 'ok' ? '✓' : '✕'}</span>
       <div>
         <h2 class="rc-title">${esc(path.name)} ${path.badge ? `<span class="pc-badge">${esc(path.badge)}</span>` : ''}</h2>
-        <p class="sub rc-flow">${esc(path.denoiser_name || path.denoiser)} → ${esc(path.separator_name || path.separator)}</p>
+        <p class="sub rc-flow">${esc(path.denoiser_name || path.denoiser)} → ${esc(path.separator_name || path.separator)}
+          ${(path.transcription || {}).status !== 'disabled' && path.transcription ? ' → Speech-to-text' : ''}</p>
       </div>
       <div class="head-right rc-actions">
         <span class="chip">${fmtTime((path.timings || {}).total)}</span>
@@ -1075,10 +1164,27 @@ function speakerRow(track, index, report, path, duration) {
         <div class="tl-axis"><span>0:00</span><span>${fmtClock(duration)}</span></div>
         <div class="sp-audio">
           <audio controls preload="metadata" src="${url}"></audio>
-          <a class="ghost-btn" href="${url}" download="${esc(track.file)}">Save</a>
+          <a class="ghost-btn" href="${url}" download="${esc(track.file)}">Save audio</a>
         </div>
+        ${transcriptPanel(track.transcription, report.job_id, path.id)}
       </div>
     </div>`;
+}
+
+function transcriptPanel(transcript, jobId, pathId) {
+  if (!transcript || transcript.status === 'disabled') return '';
+  const ready = ['ok', 'empty'].includes(transcript.status) && transcript.file;
+  const url = ready ? `${API}/api/files/${encodeURIComponent(jobId)}/${encodeURIComponent(pathId)}/${encodeURIComponent(transcript.file)}` : '';
+  return `<div class="transcript-box">
+    <div class="transcript-head"><b>3. Speech-to-text</b>
+      <span class="chip">${esc(transcript.method)} · ${esc(transcript.language || 'auto')}</span>
+      ${ready ? `<a class="ghost-btn" href="${url}" download="${esc(transcript.file)}">Download text file</a>`
+        : '<button class="ghost-btn" type="button" disabled>Download text file</button>'}</div>
+    ${ready ? `${((transcript.metrics || {}).warnings || []).map((message) => `<p class="transcript-warning">${esc(message)}</p>`).join('')}
+      <pre class="transcript-text" dir="auto">${esc(transcript.text || 'No speech recognized.')}</pre>`
+      : `<p class="transcript-error">${esc(transcript.error || 'Transcription unavailable.')}</p>
+          ${transcript.error_fix ? `<code>${esc(transcript.error_fix)}</code>` : ''}`}
+  </div>`;
 }
 
 function metric(label, value, kind, note) {

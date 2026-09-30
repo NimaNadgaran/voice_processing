@@ -16,6 +16,7 @@ computation, error handling -- is handled here so all backends behave the same.
 from __future__ import annotations
 
 import copy
+import threading
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import numpy as np
@@ -45,6 +46,7 @@ class BaseDenoiser:
     restore_sr: bool = True  # resample the output back to the input rate
 
     def __init__(self) -> None:
+        self._run_lock = threading.RLock()
         self._loaded = False
         self._model: Any = None
         self._load_error: str = ""
@@ -111,6 +113,12 @@ class BaseDenoiser:
     #  public entry point
     # ------------------------------------------------------------------ #
     def run(self, audio: AudioBuffer, progress: ProgressFn = None) -> DenoiseResult:
+        # Cached backends are shared by concurrent jobs; their streaming/model
+        # state must not be changed by another request during inference.
+        with self._run_lock:
+            return self._run(audio, progress)
+
+    def _run(self, audio: AudioBuffer, progress: ProgressFn = None) -> DenoiseResult:
         logs: list = []
 
         def emit(pct: float, msg: str) -> None:
@@ -120,6 +128,9 @@ class BaseDenoiser:
 
         emit(0.02, "preparing %s" % self.info.name)
         self._ensure_loaded()
+        if audio.n_samples == 0:
+            return DenoiseResult(audio.copy(), self.info.key, 0.,
+                                 metrics={"empty_input": True}, backend_used=self.info.key)
 
         source_sr = audio.sr
         work = audio

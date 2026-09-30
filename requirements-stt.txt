@@ -1,0 +1,5 @@
+# Optional local speech-to-text; no hosted service and no API token required.
+faster-whisper>=1.1,<2
+transformers>=4.46,<6
+torch>=2.6
+vosk>=0.3.45

@@ -66,6 +66,8 @@ class MossFormerClearVoiceSeparator(BaseSeparator):
         from clearvoice import ClearVoice  # type: ignore
 
         self._model_name = os.environ.get("CLEARVOICE_MODEL", "MossFormer2_SS_16K")
+        if "_SS_" not in self._model_name:
+            raise ValueError("CLEARVOICE_MODEL must be a speech separation (_SS_) checkpoint")
         self._model = ClearVoice(task="speech_separation", model_names=[self._model_name])
         self._loaded = True
 
@@ -98,19 +100,20 @@ class MossFormerClearVoiceSeparator(BaseSeparator):
     @staticmethod
     def _to_sources(out) -> List[np.ndarray]:
         """ClearVoice returns ndarray / list / dict depending on the version."""
-        if isinstance(out, dict):
-            out = list(out.values())[0] if out else None
+        while isinstance(out, dict):
+            if len(out) != 1:
+                raise RuntimeError("Expected one ClearVoice model/input result")
+            out = next(iter(out.values()))
         if out is None:
             return []
-        arr = np.asarray(out, dtype=np.float32)
+        # File inference commonly returns [source, channel=1, samples]. The old
+        # batch assumption dropped the second speaker from this exact shape.
+        arr = np.squeeze(np.asarray(out, dtype=np.float32))
         if arr.ndim == 1:
             return [arr]
         if arr.ndim == 2:
             # orient as (n_src, time)
             if arr.shape[0] > arr.shape[1]:
                 arr = arr.T
-            return [np.ascontiguousarray(arr[i]) for i in range(arr.shape[0])]
-        if arr.ndim == 3:  # (batch, n_src, time)
-            arr = arr[0]
             return [np.ascontiguousarray(arr[i]) for i in range(arr.shape[0])]
         return []

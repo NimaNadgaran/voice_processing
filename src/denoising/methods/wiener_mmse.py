@@ -29,6 +29,7 @@ from ...core.registry import register_denoiser
 from ...core.types import AudioBuffer, MethodInfo
 from ...core.utils import module_available
 from ..base import BaseDenoiser
+from ..noise import noise_profile, spectral_sizes
 
 
 def _exp1(v: np.ndarray) -> np.ndarray:
@@ -55,8 +56,8 @@ def _exp1(v: np.ndarray) -> np.ndarray:
 def mmse_lsa(
     x: np.ndarray,
     sr: int,
-    n_fft: int = 1024,
-    hop: int = 256,
+    n_fft: int | None = None,
+    hop: int | None = None,
     alpha_dd: float = 0.92,
     alpha_noise: float = 0.95,
     gain_floor_db: float = -18.0,
@@ -71,9 +72,13 @@ def mmse_lsa(
     lighter decision-directed smoothing stops the gain lagging behind speech
     onsets.
     """
+    n_fft, hop = spectral_sizes(sr, n_fft, hop)
+    if len(x) == 0:
+        return np.asarray(x, dtype=np.float32), {"backend": "mmse-lsa", "frames": 0}
     spec = stft(x, n_fft=n_fft, hop=hop)
     mag, phase = magphase(spec)
     power = mag**2
+    _, adaptive_noise = noise_profile(power, sr, hop, factor=1.0)
     n_bins, n_frames = power.shape
     if n_frames == 0:
         return x.astype(np.float32), {"backend": "mmse-lsa", "frames": 0}
@@ -95,6 +100,7 @@ def mmse_lsa(
 
     for t in range(n_frames):
         p = power[:, t]
+        noise_psd = np.maximum(noise_psd, adaptive_noise[:, t])
         gamma = np.minimum(p / noise_psd, 1e4)  # a posteriori SNR
         xi = alpha_dd * (prev_clean / noise_psd) + (1.0 - alpha_dd) * np.maximum(gamma - 1.0, 0.0)
         xi = np.maximum(xi, 1e-4)
@@ -127,6 +133,9 @@ def mmse_lsa(
     out = istft(mag * gains * phase, hop=hop, length=len(x))
     info = {
         "backend": "mmse-lsa",
+        "n_fft": n_fft,
+        "hop": hop,
+        "noise_tracking": "speech-gated-local-minima",
         "frames": int(n_frames),
         "mean_gain_db": round(float(20 * np.log10(np.maximum(gains.mean(), EPS))), 2),
         "speech_frame_ratio": round(speech_frames / float(n_frames), 4),

@@ -37,7 +37,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
 from ..core.audio_io import AUDIO_EXTS, SUPPORTED_EXTS, VIDEO_EXTS, ffmpeg_exe, ffmpeg_available
-from ..core.registry import list_denoisers, list_separators, load_all
+from ..core.registry import list_denoisers, list_separators, list_transcribers, load_all
 from ..core.utils import FRONTEND_DIR, OUT_DIR, ensure_dirs, human_size, jsonable, module_available
 from ..core.utils import contained_path, validate_component
 from ..pipeline import PipelineOptions, list_paths, resolve_path
@@ -58,7 +58,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title="Denoise & Separate",
     version=__version__,
-    description="Modular speech denoising + speaker separation with a comparison UI.",
+    description="Modular speech denoising + speaker separation + multilingual speech-to-text with a comparison UI.",
     lifespan=lifespan,
 )
 app.add_middleware(
@@ -87,6 +87,8 @@ def health() -> Dict[str, Any]:
         "denoisers_total": len(denoisers),
         "separators_available": sum(1 for s in separators if s.available),
         "separators_total": len(separators),
+        'transcribers_available': sum(m.available for m in list_transcribers()),
+        'transcribers_total': len(list_transcribers()),
         "max_upload_mb": MAX_UPLOAD_MB,
         "supported_formats": sorted(SUPPORTED_EXTS),
         "audio_formats": sorted(AUDIO_EXTS),
@@ -102,12 +104,16 @@ def health() -> Dict[str, Any]:
 def methods() -> Dict[str, Any]:
     from ..denoising.methods import IMPORT_ERRORS as DEN_ERRORS
     from ..separation.methods import IMPORT_ERRORS as SEP_ERRORS
+    from ..transcription.methods import IMPORT_ERRORS as STT_ERRORS
+    from ..transcription.languages import language_options
 
     return jsonable(
         {
             "denoisers": [m.to_dict() for m in list_denoisers()],
             "separators": [m.to_dict() for m in list_separators()],
-            "import_errors": {"denoising": DEN_ERRORS, "separation": SEP_ERRORS},
+            'transcribers': [m.to_dict() for m in list_transcribers()],
+            'languages': language_options(),
+            "import_errors": {"denoising": DEN_ERRORS, "separation": SEP_ERRORS, 'transcription': STT_ERRORS},
         }
     )
 
@@ -281,7 +287,8 @@ def get_file(job_id: str, rel_path: str):
     target = _safe_target(job_dir, rel_path)
     if not target.is_file():
         raise HTTPException(status_code=404, detail="file not found")
-    media = "audio/wav" if target.suffix.lower() == ".wav" else "application/octet-stream"
+    media = {'.wav': 'audio/wav', '.txt': 'text/plain; charset=utf-8',
+             '.json': 'application/json'}.get(target.suffix.lower(), 'application/octet-stream')
     return FileResponse(str(target), media_type=media, filename=target.name)
 
 

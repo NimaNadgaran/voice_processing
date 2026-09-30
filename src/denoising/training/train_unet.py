@@ -37,6 +37,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 PRESETS: Dict[str, Dict[str, Any]] = {
+    # CPU-sized network at 16 kHz, preserving consonants above the tiny model's
+    # 4 kHz cutoff. Used by setup.py on machines without CUDA.
+    "compact": dict(sample_rate=16000, segment_seconds=2.0, n_fft=512, hop=128,
+                    base_channels=16, depth=3, batch_size=8, steps_per_epoch=400, epochs=30),
     # laptop-CPU friendly: ~0.35 M params, 8 kHz, 1 s crops
     "tiny": dict(sample_rate=8000, segment_seconds=1.0, n_fft=256, hop=128,
                  base_channels=16, depth=3, batch_size=16, steps_per_epoch=400, epochs=30),
@@ -103,6 +107,7 @@ def main() -> int:
     ap.add_argument("--max-hours", type=float, default=None)
     ap.add_argument("--estimate-only", action="store_true",
                     help="time a handful of steps, print the ETA and exit without training")
+    ap.add_argument("--estimate-json", default=None)
     args = ap.parse_args()
 
     try:
@@ -134,6 +139,8 @@ def main() -> int:
         value = getattr(args, key, None)
         if value is not None:
             cfg[key] = value
+    if any(int(cfg[key]) <= 0 for key in ('epochs', 'steps_per_epoch', 'batch_size', 'val_items')):
+        raise ValueError('epochs, steps_per_epoch, batch_size, and val_items must be positive')
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(cfg["seed"])
@@ -150,7 +157,7 @@ def main() -> int:
     criterion = CombinedLoss(cfg["w_sisnr"], cfg["w_stft"]).to(device)
     optimiser = torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, mode="max", factor=0.5, patience=5)
-    use_amp = bool(cfg["amp"]) and device == "cuda"
+    use_amp = bool(cfg["amp"]) and str(device).startswith("cuda")
     try:  # torch >= 2.4
         scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     except (AttributeError, TypeError):  # torch < 2.4
@@ -162,27 +169,29 @@ def main() -> int:
         model.load_state_dict(ckpt["model"])
         if "optimiser" in ckpt:
             optimiser.load_state_dict(ckpt["optimiser"])
+        if "scheduler" in ckpt:
+            scheduler.load_state_dict(ckpt["scheduler"])
+        if "scaler" in ckpt:
+            scaler.load_state_dict(ckpt["scaler"])
         start_epoch = int(ckpt.get("epoch", 0))
-        best_si_sdr = float(ckpt.get("val_si_sdr", -1e9))
+        best_si_sdr = float(ckpt.get("best_val_si_sdr", ckpt.get("val_si_sdr", -1e9)))
         print(" resumed from %s at epoch %d (best %.2f dB)" % (args.resume, start_epoch, best_si_sdr))
-
-    out_dir = ROOT / cfg["out_dir"]
-    out_dir.mkdir(parents=True, exist_ok=True)
-    writer = SummaryWriter(str(ROOT / "runs" / cfg["run_name"]))
 
     # ---------------- measured ETA ----------------------------------------- #
     print("\n timing the first steps to estimate the real cost...")
-    warm = _time_steps(model, criterion, optimiser, scaler, train_loader, device, use_amp, n_steps=8)
-    per_step = warm["seconds_per_step"]
-    steps_total = cfg["steps_per_epoch"] * cfg["epochs"]
-    eta_hours = per_step * steps_total / 3600.0
-    print(" measured %.3f s/step  ->  %d steps  ->  ETA %s (+ validation)"
-          % (per_step, steps_total, _fmt_hours(eta_hours)))
-    print(" that is %.1f h/epoch at %d steps/epoch" % (per_step * cfg["steps_per_epoch"] / 3600.0,
-                                                       cfg["steps_per_epoch"]))
+    from src.core.training_runtime import measured_estimate, report_remaining, write_estimate
+    estimate = measured_estimate(model, optimiser, scaler,
+        lambda: _time_steps(model, criterion, optimiser, scaler, train_loader, device, use_amp),
+        lambda batches: _validate(model, batches, device, si_snr), val_loader, cfg,
+        start_epoch, args.estimate_json)
+    eta_hours = estimate['remaining_seconds'] / 3600
     if args.estimate_only:
         print("\n --estimate-only: stopping before training. Nothing was trained.")
         return 0
+    out_dir = ROOT / cfg["out_dir"]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    writer = SummaryWriter(str(ROOT / "runs" / cfg["run_name"]))
+    training_start = time.monotonic()
     if eta_hours > 24:
         print("\n ! this run would take longer than a day. Consider --preset tiny,")
         print("   fewer steps_per_epoch, or a GPU. Starting anyway in 5 s (ctrl-C to abort)...")
@@ -232,15 +241,21 @@ def main() -> int:
         writer.add_scalar("val/improvement_db", val["improvement"], epoch)
         print(" epoch %3d done in %s | train loss %.4f | val SI-SDR %.2f dB (input %.2f dB, +%.2f)"
               % (epoch + 1, _fmt_hours((time.time() - epoch_start) / 3600.0),
-                 running / max(1, cfg["steps_per_epoch"]),
+                 running / max(1, step + 1),
                  val["si_sdr"], val["input_si_sdr"], val["improvement"]))
 
         payload = {
             "model": model.state_dict(),
             "optimiser": optimiser.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "scaler": scaler.state_dict(),
             "config": {**cfg, "arch": "SpectralUNet"},
-            "epoch": epoch + 1,
+            # A time-budget stop must not mark an unfinished epoch complete.
+            # Resume continues from these weights and repeats the partial epoch.
+            "epoch": epoch + 1 if step + 1 >= cfg['steps_per_epoch'] else epoch,
+            "steps_in_epoch": step + 1,
             "val_si_sdr": val["si_sdr"],
+            "best_val_si_sdr": max(best_si_sdr, val["si_sdr"]),
             "params_m": params_m,
         }
         torch.save(payload, out_dir / "denoise_unet_last.pt")
@@ -250,10 +265,16 @@ def main() -> int:
             print("   ^ new best -> %s" % (out_dir / "denoise_unet_best.pt"))
         if stop:
             break
+        report_remaining(time.monotonic() - training_start, epoch + 1 - start_epoch,
+                         cfg['epochs'] - epoch - 1)
 
     writer.close()
+    if args.estimate_json:
+        estimate.update(completed_epochs=payload['epoch'] if cfg['epochs'] > start_epoch else start_epoch,
+                        stopped_early=stop, training_seconds=time.monotonic() - training_start)
+        write_estimate(args.estimate_json, estimate)
     print("\n finished. best val SI-SDR %.2f dB" % best_si_sdr)
-    print(" the app will now list 'Local SpectralUNet (your model)' as available.")
+    print(" checkpoint directory: %s" % out_dir)
     return 0
 
 
@@ -262,24 +283,17 @@ def _time_steps(model, criterion, optimiser, scaler, loader, device, use_amp, n_
     import torch
 
     model.train()
-    times = []
-    for i, (noisy, clean) in enumerate(loader):
-        if i >= n_steps:
-            break
+    def step(batch):
+        noisy, clean = batch
         noisy, clean = noisy.to(device), clean.to(device)
-        t0 = time.perf_counter()
         optimiser.zero_grad(set_to_none=True)
         with torch.autocast(device_type="cuda", enabled=use_amp):
             loss, _ = criterion(model(noisy), clean)
         scaler.scale(loss).backward()
         scaler.step(optimiser)
         scaler.update()
-        if device == "cuda":
-            torch.cuda.synchronize()
-        times.append(time.perf_counter() - t0)
-    # ignore the first two (allocator warm-up)
-    stable = times[2:] or times
-    return {"seconds_per_step": sum(stable) / max(len(stable), 1)}
+    from src.core.training_runtime import time_batches
+    return {"seconds_per_step": time_batches(step, loader, device, n_steps)}
 
 
 def _validate(model, loader, device, si_snr_fn) -> Dict[str, float]:

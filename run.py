@@ -174,7 +174,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 def cmd_doctor(_args: argparse.Namespace) -> int:
     import platform
 
-    from src.core.registry import list_denoisers, list_separators
+    from src.core.registry import list_denoisers, list_separators, list_transcribers
     from src.core.utils import module_available
 
     print("=" * 72)
@@ -211,7 +211,7 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
             "        python scripts/download_models.py deepfilternet"
         )
 
-    for title, items in (("denoisers", list_denoisers()), ("separators", list_separators())):
+    for title, items in (("denoisers", list_denoisers()), ("separators", list_separators()), ('speech-to-text', list_transcribers())):
         print("\n" + "=" * 72)
         print(" %s" % title)
         print("=" * 72)
@@ -226,16 +226,17 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
 
 
 def cmd_methods(args: argparse.Namespace) -> int:
-    from src.core.registry import list_denoisers, list_separators
+    from src.core.registry import list_denoisers, list_separators, list_transcribers
 
     payload = {
         "denoisers": [m.to_dict() for m in list_denoisers()],
         "separators": [m.to_dict() for m in list_separators()],
+        'transcribers': [m.to_dict() for m in list_transcribers()],
     }
     if args.json:
         print(json.dumps(payload, indent=2))
         return 0
-    for title in ("denoisers", "separators"):
+    for title in ("denoisers", "separators", 'transcribers'):
         print("\n%s" % title.upper())
         for m in payload[title]:
             print("  %-24s %-34s %s %s"
@@ -302,7 +303,8 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
 
     report = run_pipeline(
         Path(args.input), paths,
-        PipelineOptions(num_speakers=args.speakers, count_on=args.count_on),
+        PipelineOptions(num_speakers=args.speakers, count_on=args.count_on,
+                        transcription_method=args.transcriber, transcription_language=args.language),
         progress=lambda e: print("  [%3.0f%%] %-10s %s" % (e.get("pct", 0) * 100, e.get("stage", ""), e.get("message", ""))),
     )
     print("\n" + "=" * 72)
@@ -321,12 +323,36 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
         print("   speakers: %d" % p.get("n_speakers", 0))
         for t in p.get("tracks", []):
             print("      %-12s %6.1fs speech  %s" % (t["label"], t["total_speech"], t["file"]))
+            text = t.get('transcription', {})
+            if text.get('file'):
+                print('        text: ' + text['file'])
+            elif text.get('status') == 'failed':
+                print('        transcription failed: ' + text.get('error', ''))
     ranking = report.get("comparison", {}).get("ranking", [])
     if len(ranking) > 1:
         print("\n RANKING")
         for r in ranking:
             print("   %-8s overall %5.1f  (denoise %.0f / separate %.0f / %.2fs)"
                   % (r["id"], r["overall"], r["denoise_score"], r["separation_score"], r["seconds"]))
+    return 0
+
+
+def cmd_transcribe(args):
+    from src.transcription import transcribe
+    out = Path(args.output or (Path(args.input).stem + '_transcript.txt'))
+    result = transcribe(args.input, method=args.method, language=args.language, output_path=out,
+                        progress=lambda pct, message: print('  [%3.0f%%] %s' % (100 * pct, message)))
+    if result.status == 'failed':
+        print('Transcription failed: ' + result.error)
+        print('Try: ' + result.error_fix)
+        return 1
+    if result.status == 'disabled':
+        print('Transcription is disabled; no text file was created.')
+        return 0
+    print('Wrote %s (%s, %s) in %s' % (out, result.method, result.language or 'undetermined', human_time(result.elapsed)))
+    if args.json:
+        from src.core.utils import write_json
+        write_json(out.with_suffix('.json'), result.to_dict())
     return 0
 
 
@@ -358,7 +384,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("doctor", help="show what is installed and what is missing")
     p.set_defaults(func=cmd_doctor)
 
-    p = sub.add_parser("methods", help="list denoisers and separators")
+    p = sub.add_parser("methods", help="list denoisers, separators and transcribers")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_methods)
 
@@ -379,14 +405,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-o", "--output")
     p.set_defaults(func=cmd_separate)
 
-    p = sub.add_parser("pipeline", help="denoise + separate, one or more paths")
+    p = sub.add_parser("pipeline", help="denoise + separate + transcribe, one or more paths")
     p.add_argument("input")
     p.add_argument("--paths", default="path1", help="comma separated preset ids")
     p.add_argument("--denoiser", default=None, help="custom path: denoiser key")
     p.add_argument("--separator", default=None, help="custom path: separator key")
     p.add_argument("--speakers", type=int, default=None)
     p.add_argument("--count-on", default="original", choices=("original", "denoised"))
+    p.add_argument('--transcriber', default='auto', help='auto, none, faster_whisper, whisper_transformers, persian_wav2vec2, vosk')
+    p.add_argument('--language', default='auto', help='spoken language, e.g. fa, en, ar; auto detects with Whisper')
     p.set_defaults(func=cmd_pipeline)
+
+    p = sub.add_parser('transcribe', help='speech-to-text on one audio or video file')
+    p.add_argument('input')
+    p.add_argument('--method', default='auto')
+    p.add_argument('--language', default='auto')
+    p.add_argument('-o', '--output')
+    p.add_argument('--json', action='store_true', help='also write timestamped JSON')
+    p.set_defaults(func=cmd_transcribe)
 
     p = sub.add_parser("demo", help="generate a synthetic multi-speaker test file")
     p.add_argument("--speakers", type=int, default=4)
@@ -407,6 +443,7 @@ BANNER = """
     python run.py methods | paths         list backends / pipeline presets
     python run.py denoise  IN.wav  --method deepfilternet -o clean.wav
     python run.py separate IN.wav  --method pyannote --speakers 4 -o out/
+    python run.py transcribe IN.wav --language fa -o transcript.txt
     python run.py pipeline IN.wav  --paths path1,path4
     python run.py serve --port 8080       run the UI on another port
 

@@ -30,6 +30,7 @@ from ...core.registry import register_denoiser
 from ...core.types import AudioBuffer, MethodInfo
 from ...core.utils import CKPT_DIR, module_available
 from ..base import BaseDenoiser
+from ..chunking import chunked_enhance
 
 DEFAULT_CKPT = CKPT_DIR / "denoise_unet_best.pt"
 
@@ -99,35 +100,14 @@ class LocalUNetDenoiser(BaseDenoiser):
 
         x = np.ascontiguousarray(audio.samples)
         sr = audio.sr
-        chunk = 10 * sr          # 10 s blocks
-        overlap = sr // 2        # 0.5 s cross-fade
-        out = np.zeros(len(x), dtype=np.float32)
-        weight = np.zeros(len(x), dtype=np.float32)
-        fade = np.hanning(2 * overlap).astype(np.float32)
-
-        with torch.no_grad():
-            pos = 0
-            while pos < len(x):
-                end = min(pos + chunk, len(x))
-                seg = x[pos:end]
-                if len(seg) < self._model.n_fft:
-                    seg = np.pad(seg, (0, self._model.n_fft - len(seg)))
-                tensor = torch.from_numpy(seg).float().unsqueeze(0).to(self._device)
-                enhanced = self._model(tensor)[0].cpu().numpy().astype(np.float32)
-                enhanced = enhanced[: end - pos]
-
-                win = np.ones(len(enhanced), dtype=np.float32)
-                if pos > 0 and len(win) > overlap:
-                    win[:overlap] = fade[:overlap]
-                if end < len(x) and len(win) > overlap:
-                    win[-overlap:] = fade[overlap:]
-                out[pos:end] += enhanced * win
-                weight[pos:end] += win
-                if end >= len(x):
-                    break
-                pos = end - overlap
-
-        out /= np.maximum(weight, 1e-6)
-        info = {"backend": "local-spectral-unet", "device": self._device}
+        def process(seg):
+            if len(seg) < self._model.n_fft:
+                seg = np.pad(seg, (0, self._model.n_fft - len(seg)))
+            tensor = torch.from_numpy(np.ascontiguousarray(seg)).float().unsqueeze(0).to(self._device)
+            with torch.inference_mode():
+                return self._model(tensor)[0].cpu().numpy()
+        out = chunked_enhance(process, x, sr)
+        info = {"backend": "local-spectral-unet", "device": self._device,
+                "model_sample_rate": sr, "speech_bandwidth_hz": sr // 2}
         info.update({k: v for k, v in getattr(self, "_meta", {}).items() if v is not None})
         return AudioBuffer(out, sr), info

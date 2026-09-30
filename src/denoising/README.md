@@ -1,5 +1,9 @@
 # Denoising
 
+Latest tuning, measured results, dependency limits and reproducible checks:
+[AUDIO_VALIDATION.md](../../AUDIO_VALIDATION.md). Both local models can be
+prepared and trained sequentially with `python setup.py` from the project root.
+
 > Stage 1 of the pipeline. Input: one noisy recording. Output: one clean file.
 > Nine interchangeable backends, all behind the same three-line interface.
 
@@ -36,8 +40,9 @@ What separates the methods is **how the mask is estimated**:
 | Resemble Enhance | a diffusion model *regenerates* clean speech | large TTS-grade corpora |
 | your local U‑Net | whatever **you** train it on | your data |
 
-The practical consequence: mask-based methods can only *remove* what is there,
-so they never invent artefacts but also cannot restore a destroyed band.
+The practical consequence: mask-based methods primarily attenuate what is
+there and cannot restore a destroyed band. They can still distort speech or
+produce filtering artifacts; keep the original when preservation matters.
 Generative methods (Resemble Enhance) can restore, but may alter timbre —
 which is why the UI flags it.
 
@@ -59,7 +64,8 @@ which is why the UI flags it.
 | `api_huggingface` | Hugging Face API | api | medium | ●●●●○ | ❌ **uploads audio** | free HF token |
 
 Everything except `api_huggingface` runs entirely on your machine.
-`api_huggingface` is disabled unless you deliberately set `HF_TOKEN`, and the UI
+`api_huggingface` needs `HF_TOKEN` plus a deployed compatible denoising endpoint,
+configured via `HF_DENOISE_URL` or a hosted `HF_DENOISE_MODEL`. The UI
 shows an "uploads audio" badge next to it.
 
 ### Which one should I pick?
@@ -77,16 +83,19 @@ No GPU, no installs, need it now?          → spectral_gate
 
 ### Details worth knowing
 
-**`spectral_gate`** — builds a per-frequency noise profile from the quietest
-12 % of frames, thresholds 1.5 σ above it, then smooths the mask over 4 bins ×
-6 frames. That smoothing is the whole trick: without it you get "musical noise"
-(random surviving bins that chirp). It assumes the noise is roughly stationary.
-It will *not* remove another person talking.
+**`spectral_gate`** — tracks a local minimum-statistics noise-power profile,
+uses continuous soft power subtraction, and smooths the gain over time.
+The default 64 ms window / 16 ms hop scales with sample rate. This avoids
+the previous global binary-mask behavior and follows changing noise levels.
+It will *not* separate another person talking. The old `noise_percentile`
+argument is retained only for call compatibility and no longer controls the
+adaptive profile.
 
 **`wiener_mmse`** — the Ephraim–Malah log-spectral-amplitude estimator with
 decision-directed *a priori* SNR and a speech-presence-gated noise tracker.
 Suppression is limited (gain floored at −18 dB) which is deliberate: it sounds
-natural and never produces artefacts. Best "safe" choice.
+natural rather than gating to silence. It can still distort speech, so
+compare against the original; it is not a guarantee of forensic preservation.
 
 > **Two bugs worth knowing about, both found by `scripts/benchmark.py`.**
 > The textbook implementation scored **−9 dB SI-SDR** here — *worse than doing
@@ -95,7 +104,7 @@ natural and never produces artefacts. Best "safe" choice.
 > 1. **The noise floor was seeded from the first 8 frames.** Textbooks assume a
 >    recording opens with silence. Most real ones open mid-sentence, which seeds
 >    the noise estimate with *speech* power, so the estimator then suppresses the
->    voice. Now initialised from a low percentile over the whole file.
+>    voice. Now initialised from local minimum-statistics noise estimates.
 > 2. **Speech-presence probability was averaged across the spectrum.** Even
 >    during a vowel most bins hold no speech, so the frame average read as
 >    "silence", the noise tracker absorbed the voice, and suppression ran away.
@@ -105,6 +114,11 @@ natural and never produces artefacts. Best "safe" choice.
 > truth rather than by tradition (1024/0.92 rather than 512/0.98), it scores
 > **+4.4 to +4.8 dB** across unseen SNRs and speaker counts — the best denoiser
 > in the bare-install benchmark.
+
+Those figures describe the earlier synthetic benchmark. The current defaults
+use sample-rate-scaled windows and adaptive profiles; see AUDIO_VALIDATION.md
+for the newer recorded-speech validation (+7.58 dB mean across 54 unseen DSP
+cases). Neither benchmark guarantees performance on arbitrary recordings.
 
 **`deepfilternet`** — two-stage: an ERB gain envelope over the whole band, then
 complex *deep filters* over the first ~5 kHz which can actually recover phase.

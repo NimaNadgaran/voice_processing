@@ -53,13 +53,11 @@ DETAILS: Dict[str, Dict[str, Any]] = {
         "steps": [
             "Cut the audio into overlapping 64 ms windows and take an FFT of each "
             "(a spectrogram: frequency on one axis, time on the other).",
-            "For every frequency bin, take the 12th-percentile loudness over the "
-            "whole file. That is the noise floor at that frequency.",
-            "Set a threshold 1.5 standard deviations above the floor.",
-            "Build a mask: 1 where the signal is above the threshold, 0 below.",
-            "Blur that mask over 4 frequency bins and 6 time frames. This is the "
-            "step that matters -- an unsmoothed mask produces 'musical noise', the "
-            "random bubbling chirps that make naive noise removal sound terrible.",
+            "Smooth power over five frames and track local minima over approximately "
+            "0.8 seconds to estimate a changing per-frequency noise floor.",
+            "Subtract estimated noise power continuously rather than using a binary threshold.",
+            "Smooth the soft gain over three time frames and retain a residual floor "
+            "to reduce isolated spectral chirps and harsh gating.",
             "Multiply the spectrogram by the mask and invert the FFT back to audio.",
         ],
         "strengths": [
@@ -68,7 +66,7 @@ DETAILS: Dict[str, Dict[str, Any]] = {
             "Never invents sound that was not there",
         ],
         "limitations": [
-            "Assumes the noise stays roughly constant -- it cannot follow a passing motorbike",
+            "Tracks changing noise levels, but sudden transients and music remain difficult",
             "Will not remove another person talking (that is not noise, it is speech)",
             "Push it too hard and consonants start to sound gated and lispy",
         ],
@@ -88,13 +86,13 @@ DETAILS: Dict[str, Dict[str, Any]] = {
             "many newer methods despite being pure maths with no training data."
         ),
         "steps": [
-            "STFT the signal into 32 ms frames.",
+            "STFT the signal into 64 ms windows with a 16 ms hop, scaled to the sample rate.",
             "Track the noise power per frequency with a recursive average that is "
             "frozen while speech is present, so it keeps adapting to changing noise "
             "without swallowing the voice.",
             "Estimate the 'a priori SNR' with the decision-directed approach: "
-            "blend 98% of the previous frame's clean estimate with 2% of the "
-            "current measurement. This heavy smoothing is precisely what removes "
+            "blend 92% of the previous frame's clean estimate with 8% of the "
+            "current measurement. This smoothing reduces "
             "musical noise.",
             "Apply the MMSE log-spectral-amplitude gain, G = xi/(1+xi) * exp(E1(v)/2), "
             "floored at -18 dB so residual noise stays natural instead of turning "
@@ -102,9 +100,9 @@ DETAILS: Dict[str, Dict[str, Any]] = {
             "Inverse STFT with overlap-add.",
         ],
         "strengths": [
-            "The most natural sounding option here -- no artefacts, ever",
+            "Conservative residual-noise suppression without generative speech reconstruction",
             "Adapts to noise that changes slowly over time",
-            "Deterministic maths: nothing is invented, which matters for evidential audio",
+            "Deterministic filtering; retain the original because suppression can still distort speech",
             "Real time, no model, no download",
         ],
         "limitations": [
@@ -266,7 +264,7 @@ DETAILS: Dict[str, Dict[str, Any]] = {
         "how_it_works": (
             "The only *generative* option here, and the distinction matters. Every "
             "other method can only remove or attenuate what is already in the file. "
-            "This one runs a conventional denoiser first, then feeds the result to "
+            "Its enhancer internally combines denoising and restoration, then uses "
             "a conditional latent diffusion model that regenerates a clean 44.1 kHz "
             "waveform from scratch, conditioned on what it heard. Because it is "
             "synthesising rather than filtering, it can restore detail that is "
@@ -274,9 +272,9 @@ DETAILS: Dict[str, Dict[str, Any]] = {
             "chunks lost to packet drops."
         ),
         "steps": [
-            "Stage 1: a UNet denoiser removes the obvious noise.",
+            "Call the enhancer once; its internal denoiser handles the initial noise removal.",
             "Stage 2: a CFM (conditional flow matching) diffusion model, guided by "
-            "the denoised audio, generates clean latents over ~32 solver steps.",
+            "the audio, restores speech using 64 RK4 solver steps.",
             "A vocoder turns those latents back into a 44.1 kHz waveform.",
         ],
         "strengths": [
@@ -289,6 +287,7 @@ DETAILS: Dict[str, Dict[str, Any]] = {
             "Can subtly change a person's timbre",
             "Very slow on CPU (several times real time); a GPU is strongly advised",
             "~500 MB of weights",
+            "If enhancement fails, the reported fallback is denoise-only, not generative restoration",
         ],
         "latency": "several times real time on CPU; ~0.2x on a GPU",
         "reference": "resemble-ai/resemble-enhance (UNet denoiser + CFM enhancer)",
@@ -324,7 +323,7 @@ DETAILS: Dict[str, Dict[str, Any]] = {
         "limitations": [
             "You have to train it first -- it is unavailable until the checkpoint exists",
             "Only as good as the data you give it; it will not generalise beyond that",
-            "Training the default preset is impractical on a CPU (see the README's time table)",
+            "Full base training is expensive on CPU; setup.py selects a compact CPU preset automatically",
         ],
         "latency": "about 0.1x real time on CPU once trained",
         "reference": "This project: src/denoising/architectures.py + training/train_unet.py",
@@ -334,24 +333,24 @@ DETAILS: Dict[str, Dict[str, Any]] = {
     "api_huggingface": {
         "how_it_works": (
             "Instead of running a model on your machine, this uploads the audio to "
-            "Hugging Face's free Inference API, which runs a hosted speech "
+            "a configured Hugging Face audio endpoint, which runs a hosted speech "
             "enhancement model and sends the cleaned audio back. It exists for the "
             "case where the local options are out of reach -- a very weak machine, "
             "or an environment where you cannot install a 2.5 GB torch wheel."
         ),
         "steps": [
             "Encode the audio as a 16 kHz WAV.",
-            "POST it to the model endpoint with your free read token.",
+            "POST it to a deployed compatible audio endpoint with the configured token.",
             "If the model is cold (HTTP 503) wait for the estimated load time and retry, up to 4 times.",
             "Decode the returned audio (raw bytes or a base64 blob) back into the pipeline.",
         ],
         "strengths": [
             "No local compute and no large installs",
-            "Free tier is enough for occasional files",
+            "Can use a remotely deployed model; availability and pricing depend on the endpoint",
         ],
         "limitations": [
             "YOUR AUDIO LEAVES YOUR COMPUTER. It is uploaded to a third party. "
-            "This method stays disabled until you set HF_TOKEN yourself.",
+            "Requires HF_TOKEN plus HF_DENOISE_URL or an actually hosted HF_DENOISE_MODEL.",
             "Rate limited, and slow to start when the model is cold",
             "Needs an internet connection; unusable offline",
             "Long files may exceed the endpoint's limits",

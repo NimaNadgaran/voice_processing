@@ -51,7 +51,8 @@ def chunked_separate(
     if sr <= 0 or chunk_s <= 0 or not 0 < overlap_s < chunk_s or max_direct_s < 0:
         raise ValueError("require positive sample rate and 0 < overlap_s < chunk_s")
     if len(x) <= int(max_direct_s * sr):
-        return [np.asarray(s, dtype=np.float32) for s in fn(x)]
+        from ..core.audio_io import match_length
+        return [match_length(s, len(x)) for s in fn(x)]
 
     chunk = int(chunk_s * sr)
     overlap = max(int(overlap_s * sr), 1)
@@ -65,25 +66,32 @@ def chunked_separate(
     while pos < len(x):
         end = min(pos + chunk, len(x))
         block = x[pos:end]
-        sources = [np.asarray(s, dtype=np.float32).reshape(-1)[: len(block)] for s in fn(block)]
+        # Full context on the final call also protects convolutional/attention
+        # backends from a tiny tail shorter than their encoder kernel.
+        if len(block) < chunk:
+            block = np.pad(block, (0, chunk - len(block)))
+        sources = [np.asarray(s, dtype=np.float32).reshape(-1)[: end - pos] for s in fn(block)]
         n_src = len(sources)
-        stack = np.stack([np.pad(s, (0, len(block) - len(s))) for s in sources])
+        if not n_src:
+            raise RuntimeError("separator returned no sources for a chunk")
+        stack = np.stack([np.pad(s, (0, end - pos - len(s))) for s in sources])
 
         if out is None:
             out = np.zeros((n_src, len(x)), dtype=np.float32)
             weight = np.zeros(len(x), dtype=np.float32)
         elif out.shape[0] != n_src:  # model changed its mind about the count
-            n_src = min(n_src, out.shape[0])
-            stack = stack[:n_src]
+            raise RuntimeError("separator changed source count between chunks")
 
         if pos > 0 and overlap > 1:
-            prev_tail = out[:n_src, pos: pos + overlap] / np.maximum(weight[pos: pos + overlap], 1e-6)
-            perm = _best_permutation(prev_tail, stack[:, :overlap])
+            actual = min(overlap, end - pos)
+            prev_tail = out[:n_src, pos: pos + actual] / np.maximum(weight[pos: pos + actual], 1e-6)
+            perm = _best_permutation(prev_tail, stack[:, :actual])
             stack = stack[list(perm)]
 
         win = np.ones(stack.shape[1], dtype=np.float32)
-        if pos > 0 and len(win) > overlap:
-            win[:overlap] = fade[:overlap]
+        if pos > 0:
+            size = min(overlap, len(win))
+            win[:size] = fade[:size]
         if end < len(x) and len(win) > overlap:
             win[-overlap:] = fade[overlap:]
 

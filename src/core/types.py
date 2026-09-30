@@ -57,7 +57,7 @@ class AudioBuffer:
 class MethodInfo:
     key: str  # stable id, e.g. "deepfilternet"
     name: str  # human label
-    kind: str  # "denoise" | "separate"
+    kind: str  # "denoise" | "separate" | "transcribe"
     family: str  # "dsp" | "deep-local" | "deep-pretrained" | "api"
     description: str
     speed: str = "medium"  # "realtime" | "fast" | "medium" | "slow"
@@ -79,6 +79,9 @@ class MethodInfo:
     limitations: List[str] = field(default_factory=list)  # stated honestly
     reference: str = ""  # paper / repo it comes from
     latency: str = ""  # rough cost, in plain words
+    supported_languages: List[str] = field(default_factory=list)  # speech-to-text only
+    recommended_languages: List[str] = field(default_factory=list)
+    supports_auto_language: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)

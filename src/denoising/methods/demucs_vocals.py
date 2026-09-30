@@ -79,17 +79,21 @@ class DemucsVocalsDenoiser(BaseDenoiser):
             wav = wav.repeat(channels, 1)
 
         ref = wav.mean(0)
-        mean, std = float(ref.mean()), float(ref.std()) or 1.0
+        mean, std = float(ref.mean()), float(ref.std(unbiased=False))
+        if std < 1e-8:
+            return audio.copy(), {"backend": "htdemucs", "silent_input": True}
         wav = (wav - mean) / std
 
         with torch.no_grad():
             sources = apply_model(
-                model, wav.unsqueeze(0).to(self._device), split=True, overlap=0.15, progress=False
+                model, wav.unsqueeze(0).to(self._device), split=True, overlap=0.25, shifts=0, progress=False
             )[0]
         sources = sources * std + mean
 
         names = list(getattr(model, "sources", ["drums", "bass", "other", "vocals"]))
-        idx = names.index("vocals") if "vocals" in names else len(names) - 1
+        if "vocals" not in names:
+            raise RuntimeError("Demucs checkpoint has no vocals stem")
+        idx = names.index("vocals")
         vocals = sources[idx].mean(0).cpu().numpy().astype(np.float32)
 
         energies = {n: float(np.mean(sources[i].cpu().numpy() ** 2)) for i, n in enumerate(names)}
